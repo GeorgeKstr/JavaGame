@@ -1,49 +1,121 @@
 package com.example.game.World;
 
-import java.util.Arrays;
-
 import com.badlogic.gdx.graphics.Mesh;
 import com.badlogic.gdx.graphics.VertexAttribute;
 import com.badlogic.gdx.graphics.VertexAttributes.Usage;
 import com.example.game.Render.SimpleShader;
 
+import java.util.Arrays;
+
+/**
+ * TerrainChunk
+ * - Stores heights (short) and per-tile texture IDs (byte)
+ * - Knows its world-space origin
+ * - Can build mesh vertex/index arrays on CPU and upload Mesh on render thread
+ */
 public class TerrainChunk {
-  private final int S;           // samples per side (e.g., 64)
-  private final float tile;      // world units per grid cell (e.g., 1.0)
-  private final float yScale;    // meters per height unit (e.g., 0.5)
-  private short[] h;             // S*S heights
-  private Mesh mesh;
 
-  public TerrainChunk(int samplesPerSide, float tileSize, float yScale) {
-    this.S = samplesPerSide;
-    this.tile = tileSize;
+  // --- immutable chunk params ---
+  private final int S;            // samples per side (e.g., 64)
+  private final float tile;       // meters per cell
+  private final float yScale;     // meters per height unit
+  private final float originX;    // world x of sample (0,0)
+  private final float originZ;    // world z of sample (0,0)
+
+  // --- data ---
+  private short[] heights;        // length = S*S
+  private byte[] texIds;          // length = S*S (0=default)
+  private Mesh mesh;              // GL resource (created on render thread)
+  private boolean dirty;          // mark when CPU data changed and needs rebuild
+
+  // ---- ctor ----
+  public TerrainChunk(int S, float tile, float yScale, float originX, float originZ, byte[] texIds) {
+    this.S = S;
+    this.tile = tile;
     this.yScale = yScale;
-    this.h = new short[S * S];
+    this.originX = originX;
+    this.originZ = originZ;
+    this.heights = new short[S * S];
+    this.texIds = (texIds != null) ? Arrays.copyOf(texIds, S * S) : new byte[S * S];
   }
 
-  public void setHeights(short[] heights) {
-    if (heights.length != S * S) throw new IllegalArgumentException("heights length mismatch");
-    this.h = Arrays.copyOf(heights, heights.length);
+  // If you want to init with heights immediately
+  public TerrainChunk(int S, float tile, float yScale, float originX, float originZ,
+                      short[] heights, byte[] texIds) {
+    this(S, tile, yScale, originX, originZ, texIds);
+    setHeights(heights);
   }
 
+  public TerrainChunk(int s2, float tILE2, float ySCALE2) {
+    this.S = s2;
+    this.tile = tILE2;
+    this.yScale = ySCALE2;
+    this.originX = 0;
+    this.originZ = 0;
+    this.heights = new short[S * S];
+    this.texIds = new byte[S * S];
+}
+
+  // ---- CPU-side data setters ----
+  public void setHeights(short[] h) {
+    if (h.length != S * S) throw new IllegalArgumentException("heights length mismatch");
+    this.heights = Arrays.copyOf(h, h.length);
+    this.dirty = true;
+  }
+
+  public void setTexIds(byte[] ids) {
+    if (ids.length != S * S) throw new IllegalArgumentException("texIds length mismatch");
+    this.texIds = Arrays.copyOf(ids, ids.length);
+    this.dirty = true;
+  }
+
+  // ---- Mesh building (render thread safe wrappers) ----
+
+  /** Full build: generates verts/indices on CPU and uploads a Mesh (call on render thread). */
   public void buildMesh() {
-    int V = S * S;
-    int Q = (S - 1) * (S - 1);
+    MeshArrays md = buildMeshArrays();
+    createMeshFromArrays(md.verts, md.indices);
+  }
 
-    // pos(3) + normal(3) + uv(2) = 8 floats per vertex
-    float[] verts = new float[V * 8];
-    short[] idx = new short[Q * 6];
+  /**
+   * Upload precomputed arrays to GL. Call this ONLY on the render thread.
+   * (Used by async streaming: mesh arrays built off-thread, then uploaded here.)
+   */
+  public void createMeshFromArrays(float[] verts, short[] indices) {
+    if (mesh != null) mesh.dispose();
+    mesh = new Mesh(true, verts.length / 8, indices.length,
+        new VertexAttribute(Usage.Position, 3, "a_position"),
+        new VertexAttribute(Usage.Normal,   3, "a_normal"),
+        new VertexAttribute(Usage.TextureCoordinates, 2, "a_texCoord0"));
+    mesh.setVertices(verts);
+    mesh.setIndices(indices);
+    dirty = false;
+  }
 
-    // positions + uv, init normals to zero
+  /** Build interleaved vertex/index arrays (CPU only; no GL). */
+  public MeshArrays buildMeshArrays() {
+    final int V = S * S;
+    final int Q = (S - 1) * (S - 1);
+
+    float[] verts = new float[V * 8]; // pos(3), nrm(3), uv(2)
+    short[] idx   = new short[Q * 6];
+
+    // positions/UVs (normals temp as 0,1,0; will accumulate)
     int v = 0;
     for (int z = 0; z < S; z++) {
       for (int x = 0; x < S; x++) {
-        float px = x * tile;
-        float py = (h[z * S + x]) * yScale;
-        float pz = z * tile;
-        verts[v++] = px; verts[v++] = py; verts[v++] = pz;
-        verts[v++] = 0;  verts[v++] = 1;  verts[v++] = 0; // temp normal
-        verts[v++] = x;  verts[v++] = z;                  // uv (tile in shader)
+        float px = originX + x * tile;
+        float py = heights[z * S + x] * yScale;
+        float pz = originZ + z * tile;
+
+        verts[v++] = px;
+        verts[v++] = py;
+        verts[v++] = pz;
+        verts[v++] = 0f; // nx
+        verts[v++] = 1f; // ny
+        verts[v++] = 0f; // nz
+        verts[v++] = x;  // u (grid UV; your shader can tile from this)
+        verts[v++] = z;  // v
       }
     }
 
@@ -64,37 +136,61 @@ public class TerrainChunk {
     // normalize vertex normals
     for (int n = 0; n < V; n++) {
       int base = n * 8 + 3;
-      float nx = verts[base], ny = verts[base+1], nz = verts[base+2];
-      float len = (float)Math.sqrt(nx*nx + ny*ny + nz*nz);
-      if (len > 1e-6f) { verts[base] /= len; verts[base+1] /= len; verts[base+2] /= len; }
-      else { verts[base] = 0; verts[base+1] = 1; verts[base+2] = 0; }
+      float nx = verts[base], ny = verts[base + 1], nz = verts[base + 2];
+      float len = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
+      if (len > 1e-6f) {
+        verts[base]     = nx / len;
+        verts[base + 1] = ny / len;
+        verts[base + 2] = nz / len;
+      } else {
+        verts[base] = 0f; verts[base + 1] = 1f; verts[base + 2] = 0f;
+      }
     }
 
-    // (Re)create Mesh
-    if (mesh != null) mesh.dispose();
-    mesh = new Mesh(true, V, idx.length,
-        new VertexAttribute(Usage.Position, 3, "a_position"),
-        new VertexAttribute(Usage.Normal,   3, "a_normal"),
-        new VertexAttribute(Usage.TextureCoordinates, 2, "a_texCoord0"));
-    mesh.setVertices(verts);
-    mesh.setIndices(idx);
+    return new MeshArrays(verts, idx);
   }
 
   private static int putTri(short[] idx, int i, int a, int b, int c, float[] v) {
-    idx[i++] = (short)a; idx[i++] = (short)b; idx[i++] = (short)c;
+    idx[i++] = (short) a; idx[i++] = (short) b; idx[i++] = (short) c;
 
-    int sa = a*8, sb = b*8, sc = c*8;
-    float ax=v[sa], ay=v[sa+1], az=v[sa+2];
-    float bx=v[sb], by=v[sb+1], bz=v[sb+2];
-    float cx=v[sc], cy=v[sc+1], cz=v[sc+2];
-    float ux=bx-ax, uy=by-ay, uz=bz-az;
-    float vx=cx-ax, vy=cy-ay, vz=cz-az;
-    float nx=uy*vz-uz*vy, ny=uz*vx-ux*vz, nz=ux*vy-uy*vx;
-    v[sa+3]+=nx; v[sa+4]+=ny; v[sa+5]+=nz;
-    v[sb+3]+=nx; v[sb+4]+=ny; v[sb+5]+=nz;
-    v[sc+3]+=nx; v[sc+4]+=ny; v[sc+5]+=nz;
+    int sa = a * 8, sb = b * 8, sc = c * 8;
+    float ax = v[sa],   ay = v[sa + 1], az = v[sa + 2];
+    float bx = v[sb],   by = v[sb + 1], bz = v[sb + 2];
+    float cx = v[sc],   cy = v[sc + 1], cz = v[sc + 2];
+    float ux = bx - ax, uy = by - ay, uz = bz - az;
+    float vx = cx - ax, vy = cy - ay, vz = cz - az;
+    float nx = uy * vz - uz * vy;
+    float ny = uz * vx - ux * vz;
+    float nz = ux * vy - uy * vx;
+    v[sa + 3] += nx; v[sa + 4] += ny; v[sa + 5] += nz;
+    v[sb + 3] += nx; v[sb + 4] += ny; v[sb + 5] += nz;
+    v[sc + 3] += nx; v[sc + 4] += ny; v[sc + 5] += nz;
     return i;
   }
+
+  // ---- Sampling ----
+
+  /** Bilinear height at world (x,z); returns NaN if (x,z) is outside this chunk. */
+  public float heightAtWorld(float x, float z) {
+    float lx = (x - originX) / tile;
+    float lz = (z - originZ) / tile;
+    if (lx < 0f || lz < 0f || lx > S - 1.001f || lz > S - 1.001f) return Float.NaN;
+
+    int x0 = (int) Math.floor(lx), z0 = (int) Math.floor(lz);
+    int x1 = x0 + 1, z1 = z0 + 1;
+    float tx = lx - x0, tz = lz - z0;
+
+    float h00 = heights[z0 * S + x0] * yScale;
+    float h10 = heights[z0 * S + x1] * yScale;
+    float h01 = heights[z1 * S + x0] * yScale;
+    float h11 = heights[z1 * S + x1] * yScale;
+
+    float hx0 = h00 + (h10 - h00) * tx;
+    float hx1 = h01 + (h11 - h01) * tx;
+    return hx0 + (hx1 - hx0) * tz;
+  }
+
+  // ---- Render ----
 
   public void render(SimpleShader shader) {
     if (mesh == null) return;
@@ -104,30 +200,28 @@ public class TerrainChunk {
     mesh.unbind(shader.getProgram());
   }
 
-  public void dispose() { if (mesh != null) mesh.dispose(); }
+  public void dispose() {
+    if (mesh != null) { mesh.dispose(); mesh = null; }
+  }
 
-  // World height at arbitrary (x,z) in world units. Bilinear filtered.
-  public float heightAt(float x, float z) {
-    // convert to grid space
-    float gx = x / tile;
-    float gz = z / tile;
+  // ---- Accessors (used by TerrainSystem & editor) ----
 
-    // clamp to valid cell range (S-1 because we sample (x0,x1) and (z0,z1))
-    if (gx < 0) gx = 0; if (gz < 0) gz = 0;
-    if (gx > S - 1.001f) gx = S - 1.001f;
-    if (gz > S - 1.001f) gz = S - 1.001f;
+  public int getSize() { return S; }
+  public float getTile() { return tile; }
+  public float getYScale() { return yScale; }
+  public float getOriginX() { return originX; }
+  public float getOriginZ() { return originZ; }
 
-    int x0 = (int)Math.floor(gx), z0 = (int)Math.floor(gz);
-    int x1 = x0 + 1,             z1 = z0 + 1;
-    float tx = gx - x0,          tz = gz - z0;
+  public short[] getHeightsArray() { return heights; }
+  public byte[]  getTexIdsArray()  { return texIds; }
 
-    float h00 = h[z0 * S + x0] * yScale;
-    float h10 = h[z0 * S + x1] * yScale;
-    float h01 = h[z1 * S + x0] * yScale;
-    float h11 = h[z1 * S + x1] * yScale;
+  public boolean isDirty() { return dirty; }
+  public void setDirty(boolean dirty) { this.dirty = dirty; }
 
-    float hx0 = h00 + (h10 - h00) * tx;
-    float hx1 = h01 + (h11 - h01) * tx;
-    return hx0 + (hx1 - hx0) * tz;
+  /** CPU-side container for mesh arrays (pos/nrm/uv + indices). */
+  public static class MeshArrays {
+    public final float[] verts;
+    public final short[] indices;
+    public MeshArrays(float[] v, short[] i) { this.verts = v; this.indices = i; }
   }
 }

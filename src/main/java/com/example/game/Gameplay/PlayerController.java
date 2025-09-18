@@ -90,7 +90,7 @@ public class PlayerController {
     pos.z = MathUtils.clamp(pos.z, 0f, maxZ);
 
     // ground snap
-    float groundY = terrain.heightAt(pos.x, pos.z);
+    float groundY = terrain.heightAtWorld(pos.x, pos.z);
     pos.y = groundY + eyeHeight;
 
     // camera direction from yaw/pitch (robust)

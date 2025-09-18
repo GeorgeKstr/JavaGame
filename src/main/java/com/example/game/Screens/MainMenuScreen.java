@@ -34,12 +34,16 @@ public class MainMenuScreen implements Screen {
     TextButton play = new TextButton("Play", skin);
     TextButton options = new TextButton("Options (stub)", skin);
     TextButton quit = new TextButton("Quit", skin);
+    TextButton editor = new TextButton("Editor", skin);
 
+    
     root.add(play).row();
+    root.add(editor).row();
     root.add(options).row();
     root.add(quit).row();
-
+    
     play.addListener(SkinFactory.onClick(() -> app.goToGame()));
+    editor.addListener(SkinFactory.onClick(() -> app.goToEditor("maps/MyLevel.map")));
     options.addListener(SkinFactory.onClick(() -> System.out.println("Options coming soon")));
     quit.addListener(SkinFactory.onClick(() -> Gdx.app.exit()));
 
