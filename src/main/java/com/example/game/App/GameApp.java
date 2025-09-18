@@ -1,15 +1,20 @@
 package com.example.game.App;
 
 import com.badlogic.gdx.Game;
+import com.example.game.Config.Settings;
+import com.example.game.Config.SettingsStore;
 import com.example.game.Screens.EditorScreen;
 import com.example.game.Screens.GameScreen;
 import com.example.game.Screens.MainMenuScreen;
 
 
 public class GameApp extends Game {
+  private Settings settings;
+
 
   @Override
   public void create() {
+    settings = SettingsStore.load();
     setScreen(new MainMenuScreen(this));
   }
 
@@ -22,5 +27,5 @@ public class GameApp extends Game {
   // Convenience helpers for navigation
   public void goToGame() { setScreen(new GameScreen(this)); };
   public void goToMenu() { setScreen(new MainMenuScreen(this)); };
-  public void goToEditor(String mapString) { setScreen(new EditorScreen(this, mapString)); };
+  public void goToEditor(String mapString) { setScreen(new EditorScreen(this, mapString, settings)); };
 }

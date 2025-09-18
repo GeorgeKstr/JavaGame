@@ -27,10 +27,10 @@ public class BrushOverlay {
     rz = new float[this.segments];
   }
 
-  /**
-   * Update the overlay by casting a ray from the mouse into the terrain.
-   */
-  public void update(Camera cam, HeightSampler sampler, int brushRadiusTiles, float tileSize) {
+/**
+ * Update the overlay by casting a ray from the mouse into the terrain.
+ */
+public void update(Camera cam, HeightSampler sampler, int brushRadiusTiles, float tileSize) {
     float mx = Gdx.input.getX();
     float my = Gdx.input.getY(); // raw Y (don’t flip, Gdx already handles viewport coords)
     Ray ray = ((com.badlogic.gdx.graphics.PerspectiveCamera) cam).getPickRay(mx, my);
@@ -43,42 +43,39 @@ public class BrushOverlay {
     radiusWorld = brushRadiusTiles * tileSize;
 
     for (int i = 0; i < segments; i++) {
-      float a = (float) (i * Math.PI * 2.0 / segments);
-      float x = center.x + radiusWorld * (float) Math.cos(a);
-      float z = center.z + radiusWorld * (float) Math.sin(a);
-      float y = sampler.heightAt(x, z, center.y) + 0.02f;
-      rx[i] = x;
-      ry[i] = y;
-      rz[i] = z;
+        float a = (float) (i * Math.PI * 2.0 / segments);
+        float x = center.x + radiusWorld * (float) Math.cos(a);
+        float z = center.z + radiusWorld * (float) Math.sin(a);
+        float y = sampler.heightAt(x, z, center.y) + 0.02f;
+        rx[i] = x;
+        ry[i] = y;
+    rz[i] = z;
     }
-  }
+}
 
-  /** Draw the overlay ring. */
-  public void draw(Camera cam) {
+public void draw(Camera cam) {
     if (!hasHit) return;
-    Gdx.gl.glEnable(GL20.GL_DEPTH_TEST);
+    Gdx.gl.glDisable(GL20.GL_DEPTH_TEST);
+    Gdx.gl.glLineWidth(2f);
+
     sr.setProjectionMatrix(cam.combined);
     sr.begin(ShapeRenderer.ShapeType.Line);
     sr.setColor(1f, 1f, 0.2f, 1f);
-
     for (int i = 0; i < segments; i++) {
-      int j = (i + 1) % segments;
-      sr.line(rx[i], ry[i], rz[i], rx[j], ry[j], rz[j]);
+        int j = (i + 1) % segments;
+        sr.line(rx[i], ry[i] + 0.02f, rz[i], rx[j], ry[j] + 0.02f, rz[j]);
     }
-
-    // center cross
-    float s = Math.max(0.2f, radiusWorld * 0.05f);
-    sr.line(center.x - s, center.y, center.z, center.x + s, center.y, center.z);
-    sr.line(center.x, center.y, center.z - s, center.x, center.y, center.z + s);
-
     sr.end();
-  }
 
-  public void dispose() { sr.dispose(); }
+    Gdx.gl.glLineWidth(1f);
+    Gdx.gl.glEnable(GL20.GL_DEPTH_TEST);
+}
 
-  /**
-   * Ray vs. heightfield intersection. Marches forward and binary-refines.
-   */
+public void dispose() { sr.dispose(); }
+
+/**
+ * Ray vs. heightfield intersection. Marches forward and binary-refines.
+ */
   public static Vector3 rayIntersectTerrain(Ray ray, HeightSampler s, float step, int refineIters) {
     float tPrev = 0f, diffPrev = Float.NaN;
     Vector3 p = new Vector3();

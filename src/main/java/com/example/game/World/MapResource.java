@@ -16,7 +16,7 @@ public class MapResource {
   }
 
   private final Manifest manifest;
-  private final byte[] bytes; // entire .map in memory (simple & fast)
+  private byte[] bytes; // entire .map in memory (simple & fast)
 
   private MapResource(Manifest m, byte[] bytes) {
     this.manifest = m; this.bytes = bytes;
@@ -30,6 +30,15 @@ public class MapResource {
       return fromBytes(data);
     } catch (IOException e) {
       throw new RuntimeException("Failed to read map: " + path, e);
+    }
+  }
+
+  public void reload(String path) {
+    try {
+      bytes = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(path));
+    } catch (IOException e) {
+      // TODO Auto-generated catch block
+      e.printStackTrace();
     }
   }
 

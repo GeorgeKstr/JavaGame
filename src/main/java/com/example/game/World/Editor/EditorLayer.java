@@ -1,24 +1,29 @@
 package com.example.game.World.Editor;
 
 import com.badlogic.gdx.graphics.Camera;
-import com.badlogic.gdx.scenes.scene2d.Stage;
-import com.example.game.World.Editor.IO.MapReader;
-import com.example.game.World.Editor.IO.MapWriter;
+import com.badlogic.gdx.scenes.scene2d.ui.Skin;
+import com.badlogic.gdx.scenes.scene2d.ui.Table;
 
-/** A self-contained editor layer (terrain, objects, atmosphere, rpg, …). */
+/** One editor layer (terrain, objects, etc.). */
 public interface EditorLayer {
-  String id();                 // e.g., "terrain", "objects", "atmos", "rpg"
-  String displayName();        // for the toolbar/tab
+  String id();
+  String displayName();
 
-  void onActivate();           // layer became active (focus/UI can be created here)
-  void onDeactivate();         // layer lost focus (hide UI/cleanup transient state)
+  void onActivate();
+  void onDeactivate();
 
-  void update(float dt);       // per-frame logic
-  void render3D(Camera cam);   // gizmos/overlays for this layer
-  void buildUI(Stage ui);      // (re)build this layer's right/left panel or HUD
+  void update(float dt);
+  void render3D(Camera cam);
 
-  boolean handleInput(EditorInputRouter.InputEvent e); // return true if consumed
+  /** Build (or rebuild) this layer's tools into the provided left pane. */
+  void buildUI(Table leftPane, Skin skin);
 
-  void saveToMap(MapWriter w); // write this layer's data to the .map
-  void loadFromMap(MapReader r);// read this layer's data from the .map
+  /** Let the layer consume structured input (optional). */
+  default boolean handleInput(EditorInputRouter.InputEvent e) { return false; }
+
+  default boolean scrolled(float amountX, float amountY) { return false; }
+
+  /** Persistence hooks (optional now). */
+  default void saveToMap(Object writer) {}
+  default void loadFromMap(Object reader) {}
 }

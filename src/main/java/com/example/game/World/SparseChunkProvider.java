@@ -78,4 +78,5 @@ public class SparseChunkProvider {
     public final byte[] texIds;   // length = S*S
     public LoadedChunk(short[] h, byte[] t) { this.heights = h; this.texIds = t; }
   }
+
 }

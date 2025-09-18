@@ -34,7 +34,7 @@ public class EditorInputRouter extends InputAdapter {
   }
 
   @Override public boolean scrolled(float amountX, float amountY) {
-    if (lm.handleInput(new InputEvent(InputEvent.Type.Scroll, 0,0,0,false,false,false, amountY))) return true;
+    if (lm.scrolled(amountX, amountY)) return true;
     camCB.zoom(amountY); return true;
   }
 

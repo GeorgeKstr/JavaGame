@@ -3,16 +3,24 @@ package com.example.game.World.Editor;
 import com.badlogic.gdx.graphics.PerspectiveCamera;
 import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Vector3;
+import com.example.game.Config.Settings;
 
 /**
  * Editor camera controller: orbit, pan, zoom around a focus point.
  */
 public class EditorCamera {
+
+    private final Settings settings;
+
   private float yaw = 135f;
   private float pitch = 35f;
   private float distance = 60f;
 
   private final Vector3 focus = new Vector3(32, 0, 32); // center of interest
+
+  public EditorCamera(Settings settings) {
+    this.settings = settings;
+  }
 
   /** Orbit the camera around the focus point. */
   public void orbit(float dx, float dy) {
@@ -37,7 +45,7 @@ public class EditorCamera {
 
   /** Update the LibGDX camera position and orientation. */
   public void update(PerspectiveCamera cam) {
-    float cy = MathUtils.clamp(pitch, 5f, 85f);
+    float cy = MathUtils.clamp(pitch, -500f, 500f);
     float cp = MathUtils.cosDeg(cy), sp = MathUtils.sinDeg(cy);
     float sy = MathUtils.sinDeg(yaw), cyaw = MathUtils.cosDeg(yaw);
 

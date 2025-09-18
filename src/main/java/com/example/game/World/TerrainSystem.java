@@ -15,6 +15,7 @@ import java.util.Map;
  *  - Chunks are stored in sparse HMXS format (global S/tile/yScale)
  *  - Provides height sampling, editing (raise/lower + paint) with seam mirroring,
  *    mesh rebuild, and save helpers.
+ *  - If a chunk file is missing, it creates a flat in-memory chunk using the map's default texture.
  */
 public class TerrainSystem implements HeightSampler {
 
@@ -70,18 +71,36 @@ public class TerrainSystem implements HeightSampler {
     }
   }
 
+  /** Load chunk from map; if missing, instantiate a flat default chunk. */
   private void loadChunk(int cx, int cz) {
     byte[] hmx = map.readChunkHmx(cx, cz);
-    if (hmx == null) return; // chunk absent in map
-    var lc = provider.loadFromBytes(hmx);
 
-    float originX = cx * (S - 1) * tile;
-    float originZ = cz * (S - 1) * tile;
+    final float originX = cx * (S - 1) * tile;
+    final float originZ = cz * (S - 1) * tile;
 
-    TerrainChunk tc = new TerrainChunk(S, tile, yScale, originX, originZ, lc.texIds);
-    tc.setHeights(lc.heights);
+    TerrainChunk tc;
+    if (hmx == null) {
+      // Fallback: create a flat chunk (heights=0) with default texture id
+      int defaultTex = map.getManifest().defaultTexture;
+      tc = createFlatChunk(originX, originZ, defaultTex);
+    } else {
+      var lc = provider.loadFromBytes(hmx);
+      tc = new TerrainChunk(S, tile, yScale, originX, originZ, lc.heights, lc.texIds);
+    }
+
     tc.buildMesh();
     chunks.put(key(cx, cz), tc);
+  }
+
+  /** Create a flat S×S chunk (heights=0), texIds filled with defaultTexture if non-zero. */
+  private TerrainChunk createFlatChunk(float originX, float originZ, int defaultTexture) {
+    short[] heights = new short[S * S];             // baseline=0
+    byte[] texIds   = new byte[S * S];              // 0 = default texture
+    byte def = (byte)(defaultTexture & 0xFF);
+    if (def != 0) {
+      for (int i = 0; i < texIds.length; i++) texIds[i] = def;
+    }
+    return new TerrainChunk(S, tile, yScale, originX, originZ, heights, texIds);
   }
 
   private TerrainChunk getChunk(int cx, int cz) { return chunks.get(key(cx, cz)); }
@@ -100,6 +119,10 @@ public class TerrainSystem implements HeightSampler {
     float h = c.heightAtWorld(x, z);
     return Float.isNaN(h) ? defaultHeight : h;
   }
+
+  @Override public int getSamplesPerSide() { return S; }
+  @Override public float getTileSize() { return tile; }
+  @Override public float getYScale() { return yScale; }
 
   // =========================================================
   // Editing (with seam mirroring)
@@ -265,7 +288,7 @@ public class TerrainSystem implements HeightSampler {
     m.samplesPerSide = S;
     m.tile = tile;
     m.yScale = yScale;
-    m.defaultTexture = 0;
+    m.defaultTexture = map.getManifest().defaultTexture;
     m.chunks = new java.util.ArrayList<>();
     for (IntMap.Entry<TerrainChunk> e : chunks) {
       int cx = Math.round((float) e.value.getOriginX() / ((S - 1) * tile));
@@ -298,13 +321,12 @@ public class TerrainSystem implements HeightSampler {
   // Accessors & cleanup
   // =========================================================
 
-  public int getSamplesPerSide() { return S; }
-  public float getTileSize() { return tile; }
-  public float getYScale() { return yScale; }
   public void setViewRadius(int r) { this.viewRadius = Math.max(0, r); }
+  public boolean hasChunk(int cx, int cz) { return chunks.containsKey(key(cx, cz)); }
 
   public void dispose() {
     for (IntMap.Entry<TerrainChunk> e : chunks) e.value.dispose();
     chunks.clear();
   }
+  
 }

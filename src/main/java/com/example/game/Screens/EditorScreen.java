@@ -18,69 +18,69 @@ import com.example.game.World.Editor.EditorCamera;
 import com.example.game.World.Editor.EditorContext;
 import com.example.game.World.Editor.EditorInputRouter;
 import com.example.game.World.Editor.LayerManager;
-// the concrete terrain layer
+import com.example.game.World.Editor.EditorLayer;
+// concrete layer
 import com.example.game.World.Editor.Layers.TerrainLayer;
 
 public class EditorScreen implements Screen {
-
   private final GameApp app;
   private final String mapPath;
 
-  // Rendering
+  // render
   private PerspectiveCamera cam;
   private SimpleShader shader;
   private TerrainSystem terrain;
   private MapResource map;
 
-  // UI / input
+  // ui
   private Stage ui;
   private Skin skin;
-  private final LayerManager layers = new LayerManager();
-  private final EditorCamera edCam = new EditorCamera();
-  Label fpsLabel;
+  private Table root;      // root layout
+  private Table tabsBar;   // row 1 (top)
+  private Table leftPane;  // row 2, col 1 (sidebar)
 
-  public EditorScreen(GameApp app, String mapPath) {
+  // editor infra
+  private final LayerManager layers = new LayerManager();
+  private final EditorCamera edCam;
+
+  // add a field only if you actually use it inside EditorScreen
+private com.example.game.Config.Settings settings;
+
+
+public EditorScreen(GameApp app, String mapPath, com.example.game.Config.Settings settings) {
     this.app = app;
     this.mapPath = mapPath;
-  }
+    this.settings = settings;   // store if you need it later
+    this.edCam = new EditorCamera(settings);
+}
+
 
   @Override public void show() {
-    // Camera
+    // camera
     cam = new PerspectiveCamera(70f, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
     cam.near = 0.05f; cam.far = 4000f;
+    EditorContext.setCamera(cam);
 
-    // Shader
+    // shader
     shader = new SimpleShader();
     shader.init();
     shader.setSunDirection(-0.4f, -1.0f, -0.3f);
     shader.setColor(new Color(0.52f, 0.75f, 0.45f, 1f));
 
-    // Map/Terrain (create a blank map if missing so the editor always opens)
+    // map/terrain (create blank if missing)
     ensureMapExists(mapPath);
     map = MapResource.loadFromFile(mapPath);
     terrain = new TerrainSystem(map);
 
-    // UI
+    // ui scaffolding
     ui = new Stage(new ScreenViewport());
     skin = SkinFactory.create();
 
-    // Set global editor context (camera available to layers/overlays)
-    EditorContext.setCamera(cam);
+    buildRootLayout();      // root, tabsBar, leftPane
+    buildTabsBar();         // top tabs + Save/Back
+    registerLayersAndShow();// add TerrainLayer and build its UI into leftPane
 
-    // Register layers (terrain now; objects/atmos/rpg later)
-    layers.add(new TerrainLayer(terrain, skin));
-    // layers.add(new ObjectLayer(...));
-    // layers.add(new AtmosLayer(...));
-    // layers.add(new RpgLayer(...));
-
-    // Build the UI (toolbar + active layer panel)
-    buildToolbar();
-    layers.buildUI(ui);
-    fpsLabel = new Label("FPS: 0", skin);
-    fpsLabel.setPosition(10, 10); // bottom-left
-    ui.addActor(fpsLabel);
-
-    // Input routing: UI first, then editor router (which delegates to active layer or camera)
+    // input: UI first, then router for camera/pan/orbit and layer input
     Gdx.input.setInputProcessor(new InputMultiplexer(ui,
       new EditorInputRouter(layers, new EditorInputRouter.CameraCallbacks() {
         @Override public void orbit(float dx, float dy) { edCam.orbit(dx, dy); }
@@ -90,11 +90,80 @@ public class EditorScreen implements Screen {
     ));
   }
 
+  private void buildRootLayout() {
+    root = new Table();
+    root.setFillParent(true);
+    ui.addActor(root);
+
+    // Row 1: tabs bar
+    tabsBar = new Table();
+    tabsBar.defaults().pad(6);
+    root.add(tabsBar).growX().left(); // full width
+    root.row();
+
+    // Row 2: content row (left tools + spacer)
+    leftPane = new Table();
+    leftPane.top().left().pad(8);
+
+    ScrollPane leftScroll = new ScrollPane(leftPane, skin);
+    leftScroll.setFadeScrollBars(false);
+    leftScroll.setScrollingDisabled(true, false);
+
+    root.add(leftScroll).width(360).growY().top().left();
+    root.add().grow(); // spacer/right side
+  }
+
+  private void buildTabsBar() {
+    tabsBar.clear();
+
+    // tabs
+    HorizontalGroup tabs = new HorizontalGroup();
+    tabs.space(6f);
+    tabsBar.add(tabs).left().expandX();
+
+    for (EditorLayer l : layers.all()) {
+      TextButton b = new TextButton(l.displayName(), skin);
+      tabs.addActor(b);
+      b.addListener(SkinFactory.onClick(() -> {
+        layers.setActive(l.id());
+        rebuildLeftPane();
+      }));
+    }
+
+    // right: Save / Back
+    TextButton save = new TextButton("Save (F5)", skin);
+    TextButton back = new TextButton("Back", skin);
+    tabsBar.add(save).right().padRight(6);
+    tabsBar.add(back).right();
+
+    save.addListener(SkinFactory.onClick(this::saveMap));
+    back.addListener(SkinFactory.onClick(() -> app.goToMenu()));
+  }
+
+  private void registerLayersAndShow() {
+    layers.add(new TerrainLayer(terrain, skin)); // register (more layers later)
+    // NOTE: buildTabsBar needs layers already added; rebuild it now so tabs show
+    buildTabsBar();
+    rebuildLeftPane();
+  }
+
+  private void rebuildLeftPane() {
+    leftPane.clear();
+    layers.buildUI(leftPane, skin);
+  }
+
+  private void saveMap() {
+    var manifest = terrain.buildManifest();
+    var chunkFiles = terrain.encodeChunksToHmx();
+    MapResource.save(mapPath, manifest, chunkFiles);
+    Gdx.app.log("Editor", "Saved map: " + mapPath);
+    map.reload(mapPath);
+  }
+
   private void ensureMapExists(String path) {
     java.nio.file.Path p = java.nio.file.Paths.get(path);
     if (!java.nio.file.Files.exists(p)) {
       try {
-        // simple blank 64×64, one chunk at (0,0)
         NewMapCreator.createBlankMap(path, 64, 1f, 0.5f, 0, 0, 1, 1);
       } catch (Exception e) {
         throw new RuntimeException("Failed to create blank map at " + path, e);
@@ -102,64 +171,14 @@ public class EditorScreen implements Screen {
     }
   }
 
-  private void buildToolbar() {
-    Table bar = new Table();
-    bar.setFillParent(true);
-    bar.top().left().pad(6);
-    ui.addActor(bar);
-
-    // Left side: tabs for layers
-    HorizontalGroup tabs = new HorizontalGroup();
-    tabs.space(6f);
-    bar.add(tabs).left().expandX();
-
-    for (var layer : layers.all()) {
-      TextButton b = new TextButton(layer.displayName(), skin);
-      tabs.addActor(b);
-      b.addListener(SkinFactory.onClick(() -> {
-        layers.setActive(layer.id());
-        refreshLayerUI(); // rebuild layer panel when switching
-      }));
-    }
-
-    // Right side: Save + Back
-    TextButton save = new TextButton("Save (F5)", skin);
-    TextButton back = new TextButton("Back", skin);
-    bar.add(save).right().padRight(6);
-    bar.add(back).right();
-
-    save.addListener(SkinFactory.onClick(this::saveMap));
-    back.addListener(SkinFactory.onClick(() -> app.goToMenu()));
-  }
-
-  private void refreshLayerUI() {
-    // Clear all except the toolbar (which is first actor)
-    if (ui.getActors().size > 1) {
-      // keep index 0 (toolbar), remove others
-      for (int i = ui.getActors().size - 1; i >= 1; --i) ui.getActors().removeIndex(i);
-    }
-    layers.buildUI(ui);
-  }
-
-  private void saveMap() {
-    var manifest = terrain.buildManifest();
-    java.util.Map<String, byte[]> chunkFiles = terrain.encodeChunksToHmx();
-    MapResource.save(mapPath, manifest, chunkFiles);
-    Gdx.app.log("Editor", "Saved map: " + mapPath);
-  }
-
   @Override public void render(float dt) {
-    // Camera pose
     edCam.update(cam);
-
-    // Stream chunks near the camera focus
     var f = edCam.focus();
     terrain.updateAndStream(f.x, f.z);
 
-    // Per-layer updates (tools, overlays, etc.)
     layers.update(dt);
 
-    // --- 3D pass ---
+    // 3D pass
     Gdx.gl.glViewport(0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
     Gdx.gl.glClearColor(0.05f, 0.07f, 0.10f, 1f);
     Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT | GL20.GL_DEPTH_BUFFER_BIT);
@@ -172,17 +191,14 @@ public class EditorScreen implements Screen {
     terrain.render(shader, cam);
     shader.unbind();
 
-    // Active layer overlays (brush ring, gizmos, etc.)
     layers.render3D(cam);
 
-    // --- UI pass ---
+    // UI pass
     ui.act(dt);
-    fpsLabel.setText("FPS: " + Gdx.graphics.getFramesPerSecond());
     Gdx.gl.glDisable(GL20.GL_CULL_FACE);
     Gdx.gl.glDisable(GL20.GL_DEPTH_TEST);
     ui.draw();
 
-    // Hotkeys (save/back) here so they work even if the UI doesn't have focus
     if (Gdx.input.isKeyJustPressed(Input.Keys.F5)) saveMap();
     if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) app.goToMenu();
   }
@@ -191,11 +207,9 @@ public class EditorScreen implements Screen {
     cam.viewportWidth = w; cam.viewportHeight = h; cam.update();
     ui.getViewport().update(w, h, true);
   }
-
   @Override public void pause() {}
   @Override public void resume() {}
   @Override public void hide() {}
-
   @Override public void dispose() {
     if (shader != null) shader.dispose();
     if (terrain != null) terrain.dispose();
