@@ -1,6 +1,9 @@
 package com.example.game.World;
 
+import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.graphics.Camera;
+import com.badlogic.gdx.graphics.GL20;
+import com.badlogic.gdx.graphics.TextureArray;
 import com.badlogic.gdx.utils.Array;
 import com.badlogic.gdx.utils.IntMap;
 import com.example.game.Render.SimpleShader;
@@ -16,6 +19,12 @@ import java.util.Map;
  *  - Provides height sampling, editing (raise/lower + paint) with seam mirroring,
  *    mesh rebuild, and save helpers.
  *  - If a chunk file is missing, it creates a flat in-memory chunk using the map's default texture.
+ *
+ *  Rendering notes:
+ *   - We keep a TextureArray (groundTA) built from manifest textures.
+ *   - Before drawing, we bind groundTA to unit 0 and set shader uniforms:
+ *       u_groundTex = 0, u_uvScales[256], u_uvWorldScale = 1/tile (if your shader uses it).
+ *   - No explicit unbind is required.
  */
 public class TerrainSystem implements HeightSampler {
 
@@ -30,6 +39,10 @@ public class TerrainSystem implements HeightSampler {
   private final SparseChunkProvider provider;
   private final IntMap<TerrainChunk> chunks = new IntMap<>();
 
+  // ---- Rendering (textures) ----
+  private TextureArray groundTA;       // texture array of ground materials (can be null if none)
+  private float[] uvScales = new float[256]; // per-layer uv scale (indexed by manifest TextureRef.id)
+
   public TerrainSystem(MapResource map) {
     this.map = map;
     var mf = map.getManifest();
@@ -37,6 +50,18 @@ public class TerrainSystem implements HeightSampler {
     this.tile = mf.tile;
     this.yScale = mf.yScale;
     this.provider = new SparseChunkProvider("ignored", S);
+
+    // Build texture array & uvScales if we have ground textures
+    if (!mf.groundTextures.isEmpty()) {
+      this.groundTA = map.buildGroundTextureArray();
+      // Fill uvScales from manifest (default 1.0 if 0)
+      for (MapResource.TextureRef tr : mf.groundTextures) {
+        int id = tr.id;
+        if (id >= 0 && id < uvScales.length) {
+          uvScales[id] = (tr.uvScale == 0f ? 1f : tr.uvScale);
+        }
+      }
+    }
   }
 
   // =========================================================
@@ -274,21 +299,56 @@ public class TerrainSystem implements HeightSampler {
   // =========================================================
 
   public void render(SimpleShader shader, Camera cam) {
-    // (Optional) add frustum culling here if desired
-    for (IntMap.Entry<TerrainChunk> e : chunks) e.value.render(shader);
+    // Bind program and push global uniforms
+    shader.bind();
+    shader.setProjectionView(cam.combined);
+    shader.applyUniforms();
+
+    // Bind ground texture array & push terrain uniforms (if we have textures)
+    if (groundTA != null) {
+      // Texture unit 0 for ground array
+      Gdx.gl.glActiveTexture(GL20.GL_TEXTURE0);
+      groundTA.bind();
+
+      // Set sampler + uv scales; safe to set every frame
+      var sp = shader.getProgram();
+      sp.setUniformi("u_groundTex", 0);
+      sp.setUniform1fv("u_uvScales", uvScales, 0, uvScales.length);
+
+      // Optional: if your vertex shader expects this for world-derived UVs
+      sp.setUniformf("u_uvWorldScale", 1.0f / getTileSize());
+    }
+
+    // Draw all loaded chunks
+    for (IntMap.Entry<TerrainChunk> e : chunks) {
+      e.value.render(shader);
+    }
+    // No unbind necessary.
   }
 
   // =========================================================
   // Save helpers
   // =========================================================
 
+  /**
+   * IMPORTANT: Clone from the current map manifest so we KEEP textures.ground[] and version.
+   * Only refresh the chunk list/count; everything else (tile/yScale/defaultTexture/groundTextures) stays.
+   */
   public MapResource.Manifest buildManifest() {
+    MapResource.Manifest src = map.getManifest();
+
     MapResource.Manifest m = new MapResource.Manifest();
-    m.version = 1;
+    // keep existing header values
+    m.version = Math.max(src.version, src.groundTextures.isEmpty() ? 1 : 2);
     m.samplesPerSide = S;
     m.tile = tile;
     m.yScale = yScale;
-    m.defaultTexture = map.getManifest().defaultTexture;
+    m.defaultTexture = src.defaultTexture;
+
+    // preserve textures
+    m.groundTextures = new java.util.ArrayList<>(src.groundTextures);
+
+    // rebuild chunk coordinates from loaded chunks
     m.chunks = new java.util.ArrayList<>();
     for (IntMap.Entry<TerrainChunk> e : chunks) {
       int cx = Math.round((float) e.value.getOriginX() / ((S - 1) * tile));
@@ -317,16 +377,22 @@ public class TerrainSystem implements HeightSampler {
     return out;
   }
 
+  /** Convenience: save everything, including textures you imported (staged in MapResource). */
+  public void saveAll(String path) {
+    map.saveIncludingStaged(path, encodeChunksToHmx());
+  }
+
   // =========================================================
   // Accessors & cleanup
   // =========================================================
 
   public void setViewRadius(int r) { this.viewRadius = Math.max(0, r); }
   public boolean hasChunk(int cx, int cz) { return chunks.containsKey(key(cx, cz)); }
+  public MapResource getMap() { return map; }
 
   public void dispose() {
     for (IntMap.Entry<TerrainChunk> e : chunks) e.value.dispose();
     chunks.clear();
+    if (groundTA != null) { groundTA.dispose(); groundTA = null; }
   }
-  
 }

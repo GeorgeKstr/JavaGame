@@ -12,6 +12,9 @@ import java.util.Arrays;
  * - Stores heights (short) and per-tile texture IDs (byte)
  * - Knows its world-space origin
  * - Can build mesh vertex/index arrays on CPU and upload Mesh on render thread
+ *
+ * Vertex layout (interleaved):
+ *   a_position (3), a_normal (3), a_texCoord0 (2), a_texId (1)  => 9 floats/vertex
  */
 public class TerrainChunk {
 
@@ -54,7 +57,7 @@ public class TerrainChunk {
     this.originZ = 0;
     this.heights = new short[S * S];
     this.texIds = new byte[S * S];
-}
+  }
 
   // ---- CPU-side data setters ----
   public void setHeights(short[] h) {
@@ -83,10 +86,12 @@ public class TerrainChunk {
    */
   public void createMeshFromArrays(float[] verts, short[] indices) {
     if (mesh != null) mesh.dispose();
-    mesh = new Mesh(true, verts.length / 8, indices.length,
+    mesh = new Mesh(true, verts.length / 9, indices.length,
         new VertexAttribute(Usage.Position, 3, "a_position"),
         new VertexAttribute(Usage.Normal,   3, "a_normal"),
-        new VertexAttribute(Usage.TextureCoordinates, 2, "a_texCoord0"));
+        new VertexAttribute(Usage.TextureCoordinates, 2, "a_texCoord0"),
+        // NEW: single-component generic attribute for texture layer index
+        new VertexAttribute(Usage.Generic, 1, "a_texId"));
     mesh.setVertices(verts);
     mesh.setIndices(indices);
     dirty = false;
@@ -96,11 +101,12 @@ public class TerrainChunk {
   public MeshArrays buildMeshArrays() {
     final int V = S * S;
     final int Q = (S - 1) * (S - 1);
+    final int STRIDE = 9; // pos3 + nrm3 + uv2 + texId1
 
-    float[] verts = new float[V * 8]; // pos(3), nrm(3), uv(2)
+    float[] verts = new float[V * STRIDE];
     short[] idx   = new short[Q * 6];
 
-    // positions/UVs (normals temp as 0,1,0; will accumulate)
+    // positions/UVs (normals temp as 0,1,0; will accumulate), texId as last component
     int v = 0;
     for (int z = 0; z < S; z++) {
       for (int x = 0; x < S; x++) {
@@ -114,8 +120,11 @@ public class TerrainChunk {
         verts[v++] = 0f; // nx
         verts[v++] = 1f; // ny
         verts[v++] = 0f; // nz
-        verts[v++] = x;  // u (grid UV; your shader can tile from this)
+        verts[v++] = x;  // u (grid UV; shader can scale to world repeats)
         verts[v++] = z;  // v
+
+        // NEW: per-vertex texture id (as float). &0xFF to keep byte unsigned.
+        verts[v++] = (float)(texIds[z * S + x] & 0xFF);
       }
     }
 
@@ -128,14 +137,14 @@ public class TerrainChunk {
         int v2 = v0 + S;
         int v3 = v2 + 1;
 
-        i = putTri(idx, i, v0, v2, v1, verts);
-        i = putTri(idx, i, v1, v2, v3, verts);
+        i = putTri(idx, i, v0, v2, v1, verts, STRIDE);
+        i = putTri(idx, i, v1, v2, v3, verts, STRIDE);
       }
     }
 
     // normalize vertex normals
     for (int n = 0; n < V; n++) {
-      int base = n * 8 + 3;
+      int base = n * STRIDE + 3;
       float nx = verts[base], ny = verts[base + 1], nz = verts[base + 2];
       float len = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
       if (len > 1e-6f) {
@@ -150,18 +159,19 @@ public class TerrainChunk {
     return new MeshArrays(verts, idx);
   }
 
-  private static int putTri(short[] idx, int i, int a, int b, int c, float[] v) {
+  private static int putTri(short[] idx, int i, int a, int b, int c, float[] v, int STRIDE) {
     idx[i++] = (short) a; idx[i++] = (short) b; idx[i++] = (short) c;
 
-    int sa = a * 8, sb = b * 8, sc = c * 8;
-    float ax = v[sa],   ay = v[sa + 1], az = v[sa + 2];
-    float bx = v[sb],   by = v[sb + 1], bz = v[sb + 2];
-    float cx = v[sc],   cy = v[sc + 1], cz = v[sc + 2];
-    float ux = bx - ax, uy = by - ay, uz = bz - az;
-    float vx = cx - ax, vy = cy - ay, vz = cz - az;
+    int sa = a * STRIDE, sb = b * STRIDE, sc = c * STRIDE;
+    float ax = v[sa],     ay = v[sa + 1],     az = v[sa + 2];
+    float bx = v[sb],     by = v[sb + 1],     bz = v[sb + 2];
+    float cx = v[sc],     cy = v[sc + 1],     cz = v[sc + 2];
+    float ux = bx - ax,   uy = by - ay,       uz = bz - az;
+    float vx = cx - ax,   vy = cy - ay,       vz = cz - az;
     float nx = uy * vz - uz * vy;
     float ny = uz * vx - ux * vz;
     float nz = ux * vy - uy * vx;
+    // accumulate into normals (offset +3 within stride)
     v[sa + 3] += nx; v[sa + 4] += ny; v[sa + 5] += nz;
     v[sb + 3] += nx; v[sb + 4] += ny; v[sb + 5] += nz;
     v[sc + 3] += nx; v[sc + 4] += ny; v[sc + 5] += nz;

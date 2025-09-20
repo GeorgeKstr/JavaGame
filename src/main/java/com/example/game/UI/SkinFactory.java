@@ -12,6 +12,7 @@ import com.badlogic.gdx.scenes.scene2d.utils.ClickListener;
 import com.badlogic.gdx.scenes.scene2d.utils.Drawable;
 import com.badlogic.gdx.scenes.scene2d.utils.NinePatchDrawable;
 
+/** Minimal programmatic skin with button/toggle/slider styles (horizontal & vertical). */
 public class SkinFactory {
 
   public static Skin create() {
@@ -55,7 +56,7 @@ public class SkinFactory {
     skin.add("scroll",       tinted(whiteTex, scrollTrack), Drawable.class);
     skin.add("scroll-knob",  tinted(whiteTex, scrollKnob),  Drawable.class);
 
-    // ---- label styles ----
+    // ---- Label styles ----
     Label.LabelStyle label = new Label.LabelStyle(font, Color.WHITE);
     skin.add("default", label);
 
@@ -72,12 +73,20 @@ public class SkinFactory {
     tbs.fontColor = Color.WHITE;
     skin.add("default", tbs);
 
-    // ---- Button style ----
+    // ---- Button style (plain) ----
     Button.ButtonStyle bs = new Button.ButtonStyle();
     bs.up   = skin.getDrawable("btn-up");
     bs.over = skin.getDrawable("btn-over");
     bs.down = skin.getDrawable("btn-down");
     skin.add("default", bs);
+
+    // ---- Toggle Button style ----
+    Button.ButtonStyle toggle = new Button.ButtonStyle();
+    toggle.up      = skin.getDrawable("btn-up");
+    toggle.over    = skin.getDrawable("btn-over");
+    toggle.down    = skin.getDrawable("btn-down");
+    toggle.checked = tinted(whiteTex, new Color(0.16f, 0.35f, 0.22f, 1f)); // green-ish when checked
+    skin.add("toggle", toggle);
 
     // ---- CheckBox style ----
     CheckBox.CheckBoxStyle cbs = new CheckBox.CheckBoxStyle();
@@ -87,14 +96,53 @@ public class SkinFactory {
     cbs.fontColor = Color.WHITE;
     skin.add("default", cbs);
 
-    // ---- ScrollPane style (FIX for your error) ----
+    // ---- ScrollPane style ----
     ScrollPane.ScrollPaneStyle sps = new ScrollPane.ScrollPaneStyle();
-    sps.background   = skin.getDrawable("bg");           // panel bg
-    sps.hScroll      = skin.getDrawable("scroll");       // track
-    sps.hScrollKnob  = skin.getDrawable("scroll-knob");  // knob
+    sps.background   = skin.getDrawable("bg");
+    sps.hScroll      = skin.getDrawable("scroll");
+    sps.hScrollKnob  = skin.getDrawable("scroll-knob");
     sps.vScroll      = skin.getDrawable("scroll");
     sps.vScrollKnob  = skin.getDrawable("scroll-knob");
     skin.add("default", sps);
+
+    // ---- TextField style ----
+    TextField.TextFieldStyle tfs = new TextField.TextFieldStyle();
+    tfs.background = skin.getDrawable("btn-up");
+    tfs.font = font;
+    tfs.fontColor = Color.WHITE;
+    tfs.cursor = tinted(whiteTex, Color.WHITE);
+    tfs.selection = tinted(whiteTex, new Color(1f,1f,1f,0.25f));
+    skin.add("default", tfs);
+
+    Slider.SliderStyle sliderH = new Slider.SliderStyle();
+    NinePatchDrawable track = tinted(whiteTex, scrollTrack);
+    track.setMinHeight(8f);      // thicker line
+    track.setLeftWidth(6f);      // some padding so knob can sit inside track
+    track.setRightWidth(6f);
+    sliderH.background = track;
+
+    NinePatchDrawable knob = tinted(whiteTex, scrollKnob);
+    knob.setMinWidth(18f);       // bigger knob
+    knob.setMinHeight(18f);
+    sliderH.knob = knob;
+
+    // (Optional) pre/post track fill
+    sliderH.knobBefore = tinted(whiteTex, new Color(1f,1f,1f,0.18f));
+    sliderH.knobAfter  = tinted(whiteTex, new Color(1f,1f,1f,0.10f));
+    sliderH.knobBefore.setMinHeight(8f);
+    sliderH.knobAfter.setMinHeight(8f);
+
+    // Register styles
+    skin.add("default-horizontal", sliderH);
+    skin.add("default-vertical", sliderH);   // reuse; fine for our UI
+    skin.add("default", sliderH);
+
+    // ---- Window / Dialog style ----
+    Window.WindowStyle ws = new Window.WindowStyle();
+    ws.titleFont = font;
+    ws.titleFontColor = Color.WHITE;
+    ws.background = skin.getDrawable("bg");
+    skin.add("default", ws);
 
     return skin;
   }

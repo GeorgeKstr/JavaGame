@@ -11,6 +11,7 @@ public class Lwjgl3Launcher {
     cfg.setTitle("Heightmap Starter");
     cfg.setWindowedMode(1280, 720);
     cfg.useVsync(true);
+    cfg.setOpenGLEmulation(Lwjgl3ApplicationConfiguration.GLEmulation.GL30, 3, 2);
     // Start your GameApp (the Screen manager)
     new Lwjgl3Application(new GameApp(), cfg);
   }
