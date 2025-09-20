@@ -1,0 +1,190 @@
+package com.example.game.UI.Editor;
+
+import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.Input;
+import com.badlogic.gdx.graphics.Color;
+import com.badlogic.gdx.scenes.scene2d.*;
+import com.badlogic.gdx.scenes.scene2d.ui.*;
+import com.badlogic.gdx.scenes.scene2d.utils.ChangeListener;
+import com.badlogic.gdx.scenes.scene2d.utils.ChangeListener.ChangeEvent;
+import com.badlogic.gdx.utils.Disposable;
+import com.badlogic.gdx.utils.viewport.ScreenViewport;
+import com.example.game.UI.SkinFactory;
+import com.example.game.World.Editor.LayerManager;
+import com.example.game.World.Editor.EditorLayer;
+
+public final class EditorHUD implements Disposable {
+  public interface Callbacks {
+    void onBack();
+    void onSave();
+    void onHourChanged(float hour);
+    void onSunSizeChanged(float deg);
+    void onWarmthChanged(float warmth);
+    void onGodRaysChanged(float exposure);
+    void onViewDistanceChanged(int radius);
+  }
+
+  private final Stage stage = new Stage(new ScreenViewport());
+  private final Skin skin = SkinFactory.create();
+  private final Table root = new Table();
+  private final Table tabsBar = new Table();
+  private final Table leftPane = new Table();
+  private final Table rightPane = new Table();
+
+  private Label hourLabel, raysLabel, distanceLabel, fpsLabel;
+  private Slider hourSlider, raysSlider, distanceSlider;
+
+  public EditorHUD() {
+    root.setFillParent(true);
+    stage.addActor(root);
+  }
+
+  public Stage stage() { return stage; }
+  public Skin skin() { return skin; }
+
+  public void build(LayerManager layers, Callbacks cb, float initialHour,
+                    float initialRays, int initialDist) {
+    // --- top bar
+    tabsBar.clear();
+    tabsBar.defaults().pad(6);
+    HorizontalGroup tabs = new HorizontalGroup(); tabs.space(6f);
+    tabsBar.add(tabs).left().expandX();
+
+    for (EditorLayer l : layers.all()) {
+      TextButton b = new TextButton(l.displayName(), skin);
+      tabs.addActor(b);
+      b.addListener(SkinFactory.onClick(() -> {
+        layers.setActive(l.id());
+        rebuildLeftPane(layers);
+      }));
+    }
+
+    fpsLabel = new Label("FPS: --", skin);
+    tabsBar.add(fpsLabel).padRight(12).right();
+
+    TextButton save = new TextButton("Save (F5)", skin);
+    save.addListener(SkinFactory.onClick(cb::onSave));
+    tabsBar.add(save).right().padRight(6);
+
+    TextButton back = new TextButton("Back", skin);
+    back.addListener(SkinFactory.onClick(cb::onBack));
+    tabsBar.add(back).right();
+
+    // --- left tools (scroll)
+    leftPane.clear(); leftPane.top().left().pad(8);
+    ScrollPane leftScroll = new ScrollPane(leftPane, skin);
+    leftScroll.setFadeScrollBars(false);
+    leftScroll.setScrollingDisabled(true, false);
+
+    // --- right controls
+    rightPane.clear(); rightPane.top().right().pad(8);
+    buildRightControls(rightPane, cb, initialHour, initialRays, initialDist);
+
+    // --- layout
+    root.clear();
+    root.add(tabsBar).growX().left(); root.row();
+    root.add(leftScroll).width(360).growY().top().left();
+    root.add().grow();
+    root.add(rightPane).width(260).growY().top().right();
+
+    rebuildLeftPane(layers);
+  }
+
+  public void rebuildLeftPane(LayerManager layers) {
+    leftPane.clear();
+    layers.buildUI(leftPane, skin);
+  }
+
+  private void buildRightControls(Table parent, Callbacks cb,
+                                  float initialHour, float initialRays, int initialDist) {
+    parent.add(new Label("Sky / Time", skin, "title")).left().row();
+
+    hourLabel = new Label(formatHour(initialHour), skin);
+    parent.add(hourLabel).left().padBottom(6).row();
+
+    hourSlider = new Slider(0f, 24f, 0.05f, false, skin);
+    hourSlider.setValue(initialHour);
+    hourSlider.addListener(new ChangeListener() {
+      @Override public void changed(ChangeEvent event, Actor actor) {
+        float h = hourSlider.getValue();
+        hourLabel.setText(formatHour(h));
+        cb.onHourChanged(h);
+      }
+    });
+    parent.add(hourSlider).width(240).height(32).padBottom(8).row();
+
+    final Label sizeLbl = new Label("Sun Size: 0.90°", skin);
+    parent.add(sizeLbl).left().padTop(8).row();
+    final Slider sizeSlider = new Slider(0.3f, 3.0f, 0.01f, false, skin);
+    sizeSlider.setValue(0.90f);
+    sizeSlider.addListener(new ChangeListener() {
+      @Override public void changed(ChangeEvent event, Actor actor) {
+        float v = sizeSlider.getValue();
+        sizeLbl.setText(String.format("Sun Size: %.2f°", v));
+        cb.onSunSizeChanged(v);
+      }
+    });
+    parent.add(sizeSlider).width(240).height(32).row();
+
+    final Label warmLbl = new Label("Warmth: 0.35", skin);
+    parent.add(warmLbl).left().padTop(8).row();
+    final Slider warmSlider = new Slider(0f, 1f, 0.01f, false, skin);
+    warmSlider.setValue(0.35f);
+    warmSlider.addListener(new ChangeListener() {
+      @Override public void changed(ChangeEvent event, Actor actor) {
+        float v = warmSlider.getValue();
+        warmLbl.setText(String.format("Warmth: %.2f", v));
+        cb.onWarmthChanged(v);
+      }
+    });
+    parent.add(warmSlider).width(240).height(32).row();
+
+    raysLabel = new Label(String.format("God Rays: %.2f", initialRays), skin);
+    parent.add(raysLabel).left().padTop(8).row();
+    raysSlider = new Slider(0f, 1.5f, 0.01f, false, skin);
+    raysSlider.setValue(initialRays);
+    raysSlider.addListener(new ChangeListener() {
+      @Override public void changed(ChangeEvent event, Actor actor) {
+        float v = raysSlider.getValue();
+        raysLabel.setText(String.format("God Rays: %.2f", v));
+        cb.onGodRaysChanged(v);
+      }
+    });
+    parent.add(raysSlider).width(240).height(32).row();
+
+    distanceLabel = new Label("Render Distance: " + initialDist, skin);
+    parent.add(distanceLabel).left().padTop(8).row();
+    distanceSlider = new Slider(0f, 100f, 1f, false, skin);
+    distanceSlider.setValue(initialDist);
+    distanceSlider.addListener(new ChangeListener() {
+      @Override public void changed(ChangeEvent event, Actor actor) {
+        int v = (int)distanceSlider.getValue();
+        distanceLabel.setText("Render Distance: " + v);
+        cb.onViewDistanceChanged(v);
+      }
+    });
+    parent.add(distanceSlider).width(240).height(32).row();
+  }
+
+  public void setFps(int fps) { if (fpsLabel != null) fpsLabel.setText("FPS: " + fps); }
+
+  public void actAndDraw(float dt) {
+    stage.act(dt);
+    stage.draw();
+    if (Gdx.input.isKeyJustPressed(Input.Keys.F5)) {
+      // convenience: pretend the "Save" button was pressed
+      for (Actor a : tabsBar.getChildren()) {
+        // noop; leave actual save to EditorScreen which handles F5 separately if you want
+      }
+    }
+  }
+
+  @Override public void dispose() { stage.dispose(); skin.dispose(); }
+
+  private static String formatHour(float h) {
+    int hh = ((int)h) % 24;
+    int mm = (int)((h - (int)h) * 60f + 0.5f);
+    if (mm >= 60) { mm -= 60; hh = (hh + 1) % 24; }
+    return String.format("Hour: %02d:%02d", hh, mm);
+  }
+}
