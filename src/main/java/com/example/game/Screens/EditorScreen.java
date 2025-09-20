@@ -76,13 +76,15 @@ public class EditorScreen implements Screen {
     Texture birdTex = new Texture(Gdx.files.internal("textures/bird_silhouette.png"), true); // mipmaps
     birdTex.setFilter(TextureFilter.MipMapLinearLinear, TextureFilter.Linear);
     birdTex.setWrap(TextureWrap.ClampToEdge, TextureWrap.ClampToEdge);
-    birdsPass = new BirdsPass(25);
+    birdsPass = new BirdsPass(30);
     birdsPass.init();
-    birdsPass.setRadius(400f);
+    birdsPass.setRadius(600f);
     birdsPass.setPixelSizeRange(2.0f, 9.0f);
     birdsPass.setGlobalSpeed(0.8f);
     birdsPass.setTexture(birdTex, true);
     birdsPass.setTint(0.9f, 0.9f, 0.9f); // optional: brighten if yo
+    birdsPass.setCenterRepel(0.8f);   // pushes projected points outward (0..1)
+    birdsPass.setHorizonBias(1.0f);
     ctx = new RenderContext(cam, sunDirWorld);
     pipeline = new RenderPipeline()
         .add(skyPass)
