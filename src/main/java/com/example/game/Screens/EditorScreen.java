@@ -66,6 +66,9 @@ public class EditorScreen implements Screen {
   private Label raysLabel;
   private Slider raysSlider;
 
+  private Label distanceLabel;
+  private Slider distanceSlider;
+
   // NEW: FPS counter
   private Label fpsLabel;
 
@@ -267,6 +270,22 @@ public class EditorScreen implements Screen {
       }
     });
     parent.add(raysSlider).width(240).height(32).row();
+
+    // --- View Distance slider ---
+    distanceLabel = new Label("Render Distance: 3.00", skin);
+    parent.add(distanceLabel).left().padTop(8).row();
+
+    distanceSlider = new Slider(0f, 100f, 1f, false, skin);
+    distanceSlider.setAnimateDuration(0f);
+    distanceSlider.setValue(3f);
+    distanceSlider.addListener(new ChangeListener() {
+      @Override public void changed(ChangeEvent event, Actor actor) {
+        float v = distanceSlider.getValue();
+        terrain.setViewRadius((int)v);
+        distanceLabel.setText(String.format("Distance: %.2f", v));
+      }
+    });
+    parent.add(distanceSlider).width(240).height(32).row();
   }
 
   private static String formatHour(float h) {
