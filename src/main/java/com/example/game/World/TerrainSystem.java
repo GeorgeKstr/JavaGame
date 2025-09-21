@@ -41,6 +41,21 @@ public class TerrainSystem implements HeightSampler {
   private float hysteresis = 12f;
   private final IntMap<Integer> lastLod = new IntMap<>();
 
+    /** World-space edge length of one chunk. */
+  private float chunkWorldSize() { return (S - 1) * tile; }
+
+  /** True if the center of chunk (cx,cz) is within radiusMeters of point (px,pz). */
+  private boolean isChunkWithinRadius(int cx, int cz, float px, float pz, float radiusMeters) {
+    float size = chunkWorldSize();
+    float hw = size * 0.5f;
+    float centerX = cx * size + hw;
+    float centerZ = cz * size + hw;
+    float dx = centerX - px;
+    float dz = centerZ - pz;
+    return (dx * dx + dz * dz) <= (radiusMeters * radiusMeters);
+  }
+
+
   public TerrainSystem(MapResource map) {
     this.map = map;
     var mf = map.getManifest();
@@ -71,31 +86,52 @@ public class TerrainSystem implements HeightSampler {
   private int cellsPerChunk() { return S - 1; }
 
   /** Call per frame or on movement. */
+  /** Load/unload chunks using a true circular radius (in chunk units). */
   public void updateAndStream(float worldX, float worldZ) {
-    final int cpc = cellsPerChunk();
-    int cx = (int)Math.floor(worldX / (cpc * tile));
-    int cz = (int)Math.floor(worldZ / (cpc * tile));
+    final float size = chunkWorldSize();
 
-    Array<Integer> needed = new Array<>();
-    for (int dz = -viewRadius; dz <= viewRadius; dz++) {
-      for (int dx = -viewRadius; dx <= viewRadius; dx++) {
-        int k = key(cx + dx, cz + dz);
+    // Interpret viewRadius as a radius in CHUNKS; convert to meters
+    float radiusMeters = Math.max(0f, viewRadius) * size;
+
+    // Player's chunk
+    int pcx = (int)Math.floor(worldX / size);
+    int pcz = (int)Math.floor(worldZ / size);
+
+    // Bounding square (in chunks) that covers the circle
+    int rChunks = Math.max(0, (int)Math.ceil(radiusMeters / size));
+
+    com.badlogic.gdx.utils.Array<Integer> needed = new com.badlogic.gdx.utils.Array<>();
+
+    for (int dz = -rChunks; dz <= rChunks; dz++) {
+      for (int dx = -rChunks; dx <= rChunks; dx++) {
+        int cx = pcx + dx, cz = pcz + dz;
+        if (!isChunkWithinRadius(cx, cz, worldX, worldZ, radiusMeters)) continue; // circle test
+
+        int k = key(cx, cz);
         needed.add(k);
-        if (!chunks.containsKey(k) && !pending.contains(k)) enqueueLoad(cx + dx, cz + dz);
+        if (!chunks.containsKey(k) && !pending.contains(k)) {
+          enqueueLoad(cx, cz);
+        }
       }
     }
 
-    drainCompleted(); // GL create on main thread
+    // Apply completed worker results on the main thread
+    drainCompleted();
 
-    Array<Integer> toRemove = new Array<>();
-    for (IntMap.Entry<TerrainChunk> e : chunks) if (!needed.contains(e.key, false)) toRemove.add(e.key);
+    // Unload anything not needed
+    com.badlogic.gdx.utils.Array<Integer> toRemove = new com.badlogic.gdx.utils.Array<>();
+    for (com.badlogic.gdx.utils.IntMap.Entry<TerrainChunk> e : chunks) {
+      if (!needed.contains(e.key, false)) toRemove.add(e.key);
+    }
     for (Integer k : toRemove) {
       TerrainChunk c = chunks.remove(k);
       if (c != null) c.dispose();
       defaultFlatChunks.remove(k);
-      lastLod.remove(k);
+      // If you track LOD history per chunk, clear it here:
+      // lastLod.remove(k);
     }
   }
+
 
   private void enqueueLoad(int cx, int cz) {
     final int k = key(cx, cz);
