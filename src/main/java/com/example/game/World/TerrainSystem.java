@@ -10,39 +10,36 @@ import com.badlogic.gdx.utils.IntSet;
 import com.example.game.Render.SimpleShader;
 
 import java.io.IOException;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.*;
-import java.util.function.Supplier;
 
-/**
- * TerrainSystem (threaded streaming + skip-empty-save)
- */
 public class TerrainSystem implements HeightSampler {
 
-  // ---- Config (from map manifest) ----
-  private final int S;          // samples per side
-  private final float tile;     // meters per cell
-  private final float yScale;   // meters per height unit
-  private int viewRadius = 3;   // in chunk coords
+  // ---- Config ----
+  private final int S;
+  private final float tile, yScale;
+  private int viewRadius = 3;
 
   // ---- Data ----
   private final MapResource map;
   private final SparseChunkProvider provider;
   private final IntMap<TerrainChunk> chunks = new IntMap<>();
+  private final IntSet defaultFlatChunks = new IntSet(); // auto-made, untouched → don’t save
 
-  // Track which loaded coords were created as "flat default" (file missing).
-  // If such a chunk is never edited (isDirty=false), we won't persist it.
-  private final IntSet defaultFlatChunks = new IntSet();
-
-  // ---- Streaming (threading) ----
-  private final ExecutorService loaderPool;
+  // ---- Streaming ----
+  private final ExecutorService pool;
   private final ConcurrentLinkedQueue<Result> completed = new ConcurrentLinkedQueue<>();
-  private final IntSet pendingLoads = new IntSet(); // avoid duplicate enqueues
+  private final IntSet pending = new IntSet();
 
   // ---- Rendering (textures) ----
   private TextureArray groundTA;
   private final float[] uvScales = new float[256];
+
+  // ---- LOD selection ----
+  private int MAX_LOD = 0; // computed from S so that (S-1) % (1<<MAX_LOD) == 0
+  private float[] lodDistances = new float[]{ 50f, 120f, 260f, 520f }; // thresholds for LOD1..n
+  private float hysteresis = 12f;
+  private final IntMap<Integer> lastLod = new IntMap<>();
 
   public TerrainSystem(MapResource map) {
     this.map = map;
@@ -52,168 +49,109 @@ public class TerrainSystem implements HeightSampler {
     this.yScale = mf.yScale;
     this.provider = new SparseChunkProvider("ignored", S);
 
-    // modest pool; tune as needed
-    int threads = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
-    this.loaderPool = Executors.newFixedThreadPool(threads, r -> {
-      Thread t = new Thread(r, "ChunkLoader");
-      t.setDaemon(true);
-      return t;
-    });
+    // compute MAX_LOD so that step divides (S-1)
+    int cells = S - 1, lod = 0;
+    while (((cells % (1 << (lod + 1))) == 0) && lod < 6) lod++;
+    this.MAX_LOD = lod; // e.g., S=65 => cells=64 => MAX_LOD=6 (0..6)
 
-    // Build texture array & uvScales if we have ground textures
+    int n = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
+    this.pool = Executors.newFixedThreadPool(n, r -> { var t = new Thread(r, "ChunkIO"); t.setDaemon(true); return t; });
+
     if (!mf.groundTextures.isEmpty()) {
       this.groundTA = map.buildGroundTextureArray();
       for (MapResource.TextureRef tr : mf.groundTextures) {
-        int id = tr.id;
-        if (id >= 0 && id < uvScales.length) {
-          uvScales[id] = (tr.uvScale == 0f ? 1f : tr.uvScale);
-        }
+        if (tr.id >= 0 && tr.id < uvScales.length) uvScales[tr.id] = (tr.uvScale == 0f ? 1f : tr.uvScale);
       }
     }
   }
 
-  // =========================================================
-  // Streaming
-  // =========================================================
+  // ---------- Streaming ----------
 
   private static int key(int cx, int cz) { return (cx & 0xFFFF) | (cz << 16); }
   private int cellsPerChunk() { return S - 1; }
 
-  /** Call each frame or on movement. */
+  /** Call per frame or on movement. */
   public void updateAndStream(float worldX, float worldZ) {
     final int cpc = cellsPerChunk();
-    int cx = (int) Math.floor(worldX / (cpc * tile));
-    int cz = (int) Math.floor(worldZ / (cpc * tile));
+    int cx = (int)Math.floor(worldX / (cpc * tile));
+    int cz = (int)Math.floor(worldZ / (cpc * tile));
 
     Array<Integer> needed = new Array<>();
     for (int dz = -viewRadius; dz <= viewRadius; dz++) {
       for (int dx = -viewRadius; dx <= viewRadius; dx++) {
-        int kc = key(cx + dx, cz + dz);
-        needed.add(kc);
-        if (!chunks.containsKey(kc) && !pendingLoads.contains(kc)) {
-          enqueueLoad(cx + dx, cz + dz);
-        }
+        int k = key(cx + dx, cz + dz);
+        needed.add(k);
+        if (!chunks.containsKey(k) && !pending.contains(k)) enqueueLoad(cx + dx, cz + dz);
       }
     }
 
-    // Drain worker completions (instantiate GL stuff here on main thread)
-    drainCompleted();
+    drainCompleted(); // GL create on main thread
 
-    // Unload out-of-range chunks
     Array<Integer> toRemove = new Array<>();
-    for (IntMap.Entry<TerrainChunk> e : chunks) {
-      if (!needed.contains(e.key, false)) toRemove.add(e.key);
-    }
+    for (IntMap.Entry<TerrainChunk> e : chunks) if (!needed.contains(e.key, false)) toRemove.add(e.key);
     for (Integer k : toRemove) {
       TerrainChunk c = chunks.remove(k);
       if (c != null) c.dispose();
-      defaultFlatChunks.remove(k); // clean metadata
+      defaultFlatChunks.remove(k);
+      lastLod.remove(k);
     }
   }
 
   private void enqueueLoad(int cx, int cz) {
     final int k = key(cx, cz);
-    pendingLoads.add(k);
+    pending.add(k);
 
-    final float originX = cx * (S - 1) * tile;
-    final float originZ = cz * (S - 1) * tile;
+    final float ox = cx * (S - 1) * tile;
+    final float oz = cz * (S - 1) * tile;
 
-    // Package the background job
-    Supplier<Result> job = () -> {
+    pool.submit(() -> {
       try {
         byte[] hmx = map.readChunkHmx(cx, cz);
-        short[] heights;
-        byte[] texIds;
-        boolean defaultFlat;
-
         if (hmx == null) {
-          int defaultTex = map.getManifest().defaultTexture;
-          var raw = createFlatRaw(defaultTex);
-          heights = raw.heights;
-          texIds  = raw.texIds;
-          defaultFlat = true;
+          int dt = map.getManifest().defaultTexture;
+          short[] h = new short[S * S];
+          byte[]  t = new byte[S * S];
+          byte def = (byte)(dt & 0xFF);
+          if (def != 0) Arrays.fill(t, def);
+          completed.add(new Result(k, ox, oz, h, t, true, null));
         } else {
           var lc = provider.loadFromBytes(hmx);
-          heights = lc.heights;
-          texIds  = lc.texIds;
-          defaultFlat = false;
+          completed.add(new Result(k, ox, oz, lc.heights, lc.texIds, false, null));
         }
-        return new Result(k, originX, originZ, heights, texIds, defaultFlat, null);
-      } catch (Throwable t) {
-        return new Result(k, originX, originZ, null, null, false, t);
+      } catch (Throwable ex) {
+        completed.add(new Result(k, ox, oz, null, null, false, ex));
       }
-    };
-
-    loaderPool.submit(() -> completed.add(job.get()));
+    });
   }
 
-  /** Called from update to create TerrainChunk + mesh on main thread. */
   private void drainCompleted() {
-    Result r;
-    while ((r = completed.poll()) != null) {
-      pendingLoads.remove(r.k);
-
-      if (r.error != null) {
-        // Log and skip
-        Gdx.app.error("TerrainSystem", "Chunk load failed for key=" + r.k, r.error);
+    for (Result r; (r = completed.poll()) != null; ) {
+      pending.remove(r.k);
+      if (r.err != null || r.h == null || r.t == null) {
+        Gdx.app.error("TerrainSystem", "Chunk load failed k=" + r.k, r.err);
         continue;
       }
-      if (r.heights == null || r.texIds == null) {
-        Gdx.app.error("TerrainSystem", "Chunk load returned null arrays for key=" + r.k, null);
-        continue;
-      }
-
-      TerrainChunk tc = new TerrainChunk(S, tile, yScale, r.originX, r.originZ, r.heights, r.texIds);
-      tc.buildMesh();
+      var tc = new TerrainChunk(S, tile, yScale, r.ox, r.oz, r.h, r.t);
+      // Build multi-LOD meshes once on load (render thread)
+      tc.buildLods(MAX_LOD);
       chunks.put(r.k, tc);
-
-      if (r.defaultFlat) {
-        defaultFlatChunks.add(r.k);
-      } else {
-        defaultFlatChunks.remove(r.k);
-      }
+      if (r.defaultFlat) defaultFlatChunks.add(r.k); else defaultFlatChunks.remove(r.k);
     }
   }
 
-  /** Data passed from worker to main thread. */
   private static final class Result {
-    final int k;
-    final float originX, originZ;
-    final short[] heights;
-    final byte[] texIds;
-    final boolean defaultFlat;
-    final Throwable error;
-    Result(int k, float ox, float oz, short[] h, byte[] t, boolean def, Throwable err) {
-      this.k = k; this.originX = ox; this.originZ = oz;
-      this.heights = h; this.texIds = t; this.defaultFlat = def; this.error = err;
-    }
-  }
-
-  // Build arrays only (no GL)
-  private RawChunk createFlatRaw(int defaultTexture) {
-    short[] heights = new short[S * S]; // zeroes
-    byte[] texIds   = new byte[S * S];
-    byte def = (byte)(defaultTexture & 0xFF);
-    if (def != 0) for (int i = 0; i < texIds.length; i++) texIds[i] = def;
-    return new RawChunk(heights, texIds);
-  }
-
-  private static final class RawChunk {
-    final short[] heights; final byte[] texIds;
-    RawChunk(short[] h, byte[] t) { heights = h; texIds = t; }
+    final int k; final float ox, oz; final short[] h; final byte[] t; final boolean defaultFlat; final Throwable err;
+    Result(int k, float ox, float oz, short[] h, byte[] t, boolean df, Throwable e) { this.k=k; this.ox=ox; this.oz=oz; this.h=h; this.t=t; this.defaultFlat=df; this.err=e; }
   }
 
   private TerrainChunk getChunk(int cx, int cz) { return chunks.get(key(cx, cz)); }
 
-  // =========================================================
-  // Sampling
-  // =========================================================
+  // ---------- Sampling ----------
 
-  @Override
-  public float heightAt(float x, float z, float defaultHeight) {
-    final int cpc = cellsPerChunk();
-    int cx = (int) Math.floor(x / (cpc * tile));
-    int cz = (int) Math.floor(z / (cpc * tile));
+  @Override public float heightAt(float x, float z, float defaultHeight) {
+    int cpc = cellsPerChunk();
+    int cx = (int)Math.floor(x / (cpc * tile));
+    int cz = (int)Math.floor(z / (cpc * tile));
     TerrainChunk c = chunks.get(key(cx, cz));
     if (c == null) return defaultHeight;
     float h = c.heightAtWorld(x, z);
@@ -224,119 +162,60 @@ public class TerrainSystem implements HeightSampler {
   @Override public float getTileSize() { return tile; }
   @Override public float getYScale() { return yScale; }
 
-  // =========================================================
-  // Editing (with seam mirroring) — unchanged logic
-  // =========================================================
+  // ---------- Editing (unchanged) ----------
 
-  private static class Index {
-    int cx, cz, lx, lz;
-    void set(int cx, int cz, int lx, int lz) { this.cx=cx; this.cz=cz; this.lx=lx; this.lz=lz; }
-  }
+  private static class Index { int cx, cz, lx, lz; void set(int cx,int cz,int lx,int lz){this.cx=cx;this.cz=cz;this.lx=lx;this.lz=lz;} }
+  private int cells() { return S - 1; }
 
   private boolean primaryIndex(int gx, int gz, Index out) {
-    int cpc = cellsPerChunk();
-    int cx = (int)Math.floor((float)gx / cpc);
-    int cz = (int)Math.floor((float)gz / cpc);
-    int lx = gx - cx * cpc;
-    int lz = gz - cz * cpc;
+    int cpc = cells();
+    int cx = (int)Math.floor((float)gx / cpc), cz = (int)Math.floor((float)gz / cpc);
+    int lx = gx - cx * cpc, lz = gz - cz * cpc;
     if (lx < 0 || lz < 0 || lx >= S || lz >= S) return false;
-    out.cx = cx; out.cz = cz; out.lx = lx; out.lz = lz;
-    return true;
+    out.set(cx, cz, lx, lz); return true;
   }
-
-  private int neighborsForSample(Index primary, Index[] outs) {
-    int count = 0;
-    if (primary.lx == S - 1) outs[count++].set(primary.cx + 1, primary.cz, 0, primary.lz);
-    if (primary.lx == 0)     outs[count++].set(primary.cx - 1, primary.cz, S - 1, primary.lz);
-    if (primary.lz == S - 1) outs[count++].set(primary.cx, primary.cz + 1, primary.lx, 0);
-    if (primary.lz == 0)     outs[count++].set(primary.cx, primary.cz - 1, primary.lx, S - 1);
-    if (primary.lx == S - 1 && primary.lz == S - 1) outs[count++].set(primary.cx + 1, primary.cz + 1, 0, 0);
-    if (primary.lx == 0     && primary.lz == S - 1) outs[count++].set(primary.cx - 1, primary.cz + 1, S - 1, 0);
-    if (primary.lx == S - 1 && primary.lz == 0)     outs[count++].set(primary.cx + 1, primary.cz - 1, 0, S - 1);
-    if (primary.lx == 0     && primary.lz == 0)     outs[count++].set(primary.cx - 1, primary.cz - 1, S - 1, S - 1);
-    return count;
+  private int neighborsForSample(Index p, Index[] o) {
+    int c=0; if (p.lx==S-1) o[c++].set(p.cx+1,p.cz,0,p.lz);
+            if (p.lx==0)   o[c++].set(p.cx-1,p.cz,S-1,p.lz);
+            if (p.lz==S-1) o[c++].set(p.cx,p.cz+1,p.lx,0);
+            if (p.lz==0)   o[c++].set(p.cx,p.cz-1,p.lx,S-1);
+            if (p.lx==S-1&&p.lz==S-1) o[c++].set(p.cx+1,p.cz+1,0,0);
+            if (p.lx==0  &&p.lz==S-1) o[c++].set(p.cx-1,p.cz+1,S-1,0);
+            if (p.lx==S-1&&p.lz==0)   o[c++].set(p.cx+1,p.cz-1,0,S-1);
+            if (p.lx==0  &&p.lz==0)   o[c++].set(p.cx-1,p.cz-1,S-1,S-1);
+    return c;
   }
 
   public boolean editHeightsCircle(int gx, int gz, int radius, short delta) {
-    boolean changed = false;
-    Index p = new Index();
-    Index[] ns = new Index[]{ new Index(), new Index(), new Index(), new Index(), new Index(), new Index(), new Index(), new Index() };
-
-    for (int dz = -radius; dz <= radius; dz++) {
-      for (int dx = -radius; dx <= radius; dx++) {
-        if (dx * dx + dz * dz > radius * radius) continue;
-
-        int gxi = gx + dx;
-        int gzi = gz + dz;
-
-        if (!primaryIndex(gxi, gzi, p)) continue;
-        TerrainChunk tc = getChunk(p.cx, p.cz);
-        if (tc == null) continue;
-
-        short[] arr = tc.getHeightsArray();
-        int idx = p.lz * S + p.lx;
-        short before = arr[idx];
-        short after = (short) (before + delta);
-        if (after != before) {
-          arr[idx] = after;
-          tc.setDirty(true);
-          changed = true;
-        }
-
-        int ncount = neighborsForSample(p, ns);
-        for (int i = 0; i < ncount; i++) {
-          TerrainChunk nb = getChunk(ns[i].cx, ns[i].cz);
-          if (nb == null) continue;
-          short[] harr = nb.getHeightsArray();
-          int nidx = ns[i].lz * S + ns[i].lx;
-          short b = harr[nidx];
-          short a = (short)(b + delta);
-          if (a != b) {
-            harr[nidx] = a;
-            nb.setDirty(true);
-          }
-        }
+    boolean changed=false; Index p=new Index(); Index[] ns={new Index(),new Index(),new Index(),new Index(),new Index(),new Index(),new Index(),new Index()};
+    for (int dz=-radius; dz<=radius; dz++) for (int dx=-radius; dx<=radius; dx++) {
+      if (dx*dx+dz*dz>radius*radius) continue;
+      int gxi=gx+dx, gzi=gz+dz;
+      if (!primaryIndex(gxi,gzi,p)) continue;
+      TerrainChunk tc=getChunk(p.cx,p.cz); if (tc==null) continue;
+      short[] arr=tc.getHeightsArray(); int idx=p.lz*S+p.lx; short b=arr[idx], a=(short)(b+delta);
+      if (a!=b){ arr[idx]=a; tc.setDirty(true); changed=true; }
+      int ncount=neighborsForSample(p,ns);
+      for(int i=0;i<ncount;i++){ TerrainChunk nb=getChunk(ns[i].cx,ns[i].cz); if(nb==null)continue;
+        short[] harr=nb.getHeightsArray(); int nidx=ns[i].lz*S+ns[i].lx; short bb=harr[nidx], aa=(short)(bb+delta);
+        if(aa!=bb){ harr[nidx]=aa; nb.setDirty(true); }
       }
     }
     return changed;
   }
 
   public boolean paintTexCircle(int gx, int gz, int radius, byte texId) {
-    boolean changed = false;
-    Index p = new Index();
-    Index[] ns = new Index[]{ new Index(), new Index(), new Index(), new Index(), new Index(), new Index(), new Index(), new Index() };
-
-    for (int dz = -radius; dz <= radius; dz++) {
-      for (int dx = -radius; dx <= radius; dx++) {
-        if (dx * dx + dz * dz > radius * radius) continue;
-
-        int gxi = gx + dx;
-        int gzi = gz + dz;
-
-        if (!primaryIndex(gxi, gzi, p)) continue;
-        TerrainChunk tc = getChunk(p.cx, p.cz);
-        if (tc == null) continue;
-
-        byte[] tex = tc.getTexIdsArray();
-        int idx = p.lz * S + p.lx;
-        byte before = tex[idx];
-        if (before != texId) {
-          tex[idx] = texId;
-          tc.setDirty(true);
-          changed = true;
-        }
-
-        int ncount = neighborsForSample(p, ns);
-        for (int i = 0; i < ncount; i++) {
-          TerrainChunk nb = getChunk(ns[i].cx, ns[i].cz);
-          if (nb == null) continue;
-          byte[] tarr = nb.getTexIdsArray();
-          int nidx = ns[i].lz * S + ns[i].lx;
-          if (tarr[nidx] != texId) {
-            tarr[nidx] = texId;
-            nb.setDirty(true);
-          }
-        }
+    boolean changed=false; Index p=new Index(); Index[] ns={new Index(),new Index(),new Index(),new Index(),new Index(),new Index(),new Index(),new Index()};
+    for (int dz=-radius; dz<=radius; dz++) for (int dx=-radius; dx<=radius; dx++) {
+      if (dx*dx+dz*dz>radius*radius) continue;
+      int gxi=gx+dx, gzi=gz+dz;
+      if (!primaryIndex(gxi,gzi,p)) continue;
+      TerrainChunk tc=getChunk(p.cx,p.cz); if (tc==null) continue;
+      byte[] tex=tc.getTexIdsArray(); int idx=p.lz*S+p.lx; byte b=tex[idx];
+      if (b!=texId){ tex[idx]=texId; tc.setDirty(true); changed=true; }
+      int ncount=neighborsForSample(p,ns);
+      for(int i=0;i<ncount;i++){ TerrainChunk nb=getChunk(ns[i].cx,ns[i].cz); if(nb==null)continue;
+        byte[] tarr=nb.getTexIdsArray(); int nidx=ns[i].lz*S+ns[i].lx; if(tarr[nidx]!=texId){ tarr[nidx]=texId; nb.setDirty(true); }
       }
     }
     return changed;
@@ -346,17 +225,43 @@ public class TerrainSystem implements HeightSampler {
     for (IntMap.Entry<TerrainChunk> e : chunks) {
       TerrainChunk c = e.value;
       if (c.isDirty()) {
-        c.buildMesh();
+        // Rebuild ALL LODs after edits
+        c.buildLods(MAX_LOD);
         c.setDirty(false);
-        // Once edited, it's no longer "default-empty" for saving purposes
-        defaultFlatChunks.remove(e.key);
+        defaultFlatChunks.remove(e.key); // once edited, it must persist
       }
     }
   }
 
-  // =========================================================
-  // Render
-  // =========================================================
+  // ---------- LOD selection & render ----------
+
+  private int selectLod(float camX, float camZ, TerrainChunk c) {
+    float cx = c.getOriginX() + (c.getSize()-1) * c.getTile() * 0.5f;
+    float cz = c.getOriginZ() + (c.getSize()-1) * c.getTile() * 0.5f;
+    float dx = camX - cx, dz = camZ - cz;
+    float dist = (float)Math.sqrt(dx*dx + dz*dz);
+
+    int desired = 0;
+    int maxCheck = Math.min(MAX_LOD, lodDistances.length);
+    for (int i = 0; i < maxCheck; i++) {
+      if (dist > lodDistances[i]) desired = i + 1; else break;
+    }
+
+    // hysteresis per chunk key
+    int k = key(Math.round(c.getOriginX() / ((S-1)*tile)), Math.round(c.getOriginZ() / ((S-1)*tile)));
+    Integer prev = lastLod.get(k);
+    if (prev != null) {
+      if (desired > prev) {
+        float back = (desired-1 < lodDistances.length ? lodDistances[desired-1] : lodDistances[lodDistances.length-1]);
+        if (dist < back + hysteresis) desired = prev;
+      } else if (desired < prev) {
+        float next = (desired < lodDistances.length ? lodDistances[desired] : Float.MAX_VALUE);
+        if (dist > next - hysteresis) desired = prev;
+      }
+    }
+    lastLod.put(k, desired);
+    return Math.min(desired, MAX_LOD);
+  }
 
   public void render(SimpleShader shader, Camera cam) {
     shader.bind();
@@ -369,80 +274,78 @@ public class TerrainSystem implements HeightSampler {
       var sp = shader.getProgram();
       sp.setUniformi("u_groundTex", 0);
       sp.setUniform1fv("u_uvScales", uvScales, 0, uvScales.length);
-      sp.setUniformf("u_uvWorldScale", 1.0f / getTileSize());
+      sp.setUniformf("u_uvWorldScale", 1f / tile);
     }
 
+    float camX = cam.position.x, camZ = cam.position.z;
     for (IntMap.Entry<TerrainChunk> e : chunks) {
-      e.value.render(shader);
+      TerrainChunk c = e.value;
+      if (!c.hasLods(MAX_LOD)) c.buildLods(MAX_LOD);
+      int lod = selectLod(camX, camZ, c);
+      c.renderLod(shader, lod);
+      c.renderLodSkirt(shader, lod);
     }
   }
 
-  // =========================================================
-  // Save helpers (skip default-empty chunks)
-  // =========================================================
+  // ---------- Save helpers (delta-preserving, unchanged from earlier refactor) ----------
 
-  public MapResource.Manifest buildManifest() {
+  // Back-compat shim if older code calls buildManifest()
+  public MapResource.Manifest buildManifest() { return buildManifestMerged(); }
+
+  /** Keep manifest stable; we only add coords we’re about to persist. */
+  public MapResource.Manifest buildManifestMerged() {
     MapResource.Manifest src = map.getManifest();
-
     MapResource.Manifest m = new MapResource.Manifest();
-    m.version = Math.max(src.version, src.groundTextures.isEmpty() ? 1 : 2);
-    m.samplesPerSide = S;
-    m.tile = tile;
-    m.yScale = yScale;
-    m.defaultTexture = src.defaultTexture;
-    m.groundTextures = new java.util.ArrayList<>(src.groundTextures);
+    m.version = Math.max(src.version, src.groundTextures.isEmpty()?1:2);
+    m.samplesPerSide = S; m.tile = tile; m.yScale = yScale; m.defaultTexture = src.defaultTexture;
+    m.groundTextures = new ArrayList<>(src.groundTextures);
 
-    m.chunks = new java.util.ArrayList<>();
+    m.chunks = new ArrayList<>(src.chunks);
+    IntSet listed = new IntSet();
+    for (int[] c : m.chunks) listed.add(key(c[0], c[1]));
+
     for (IntMap.Entry<TerrainChunk> e : chunks) {
-      // Only advertise chunks that will actually be persisted
-      if (shouldPersist(e.key, e.value)) {
-        int cx = Math.round((float) e.value.getOriginX() / ((S - 1) * tile));
-        int cz = Math.round((float) e.value.getOriginZ() / ((S - 1) * tile));
-        m.chunks.add(new int[]{cx, cz});
-      }
+      if (!shouldPersist(e.key, e.value)) continue;
+      int cx = Math.round(e.value.getOriginX() / ((S - 1) * tile));
+      int cz = Math.round(e.value.getOriginZ() / ((S - 1) * tile));
+      int k = key(cx, cz);
+      if (!listed.contains(k)) { m.chunks.add(new int[]{cx, cz}); listed.add(k); }
     }
     m.chunkCount = m.chunks.size();
     return m;
   }
 
+  /** Only returns HMXS for chunks we actually want to persist. */
   public Map<String, byte[]> encodeChunksToHmx() {
-    Map<String, byte[]> out = new HashMap<>();
+    Map<String, byte[]> out = new LinkedHashMap<>();
     for (IntMap.Entry<TerrainChunk> e : chunks) {
-      int k = e.key;
+      if (!shouldPersist(e.key, e.value)) continue;
       TerrainChunk c = e.value;
-
-      if (!shouldPersist(k, c)) continue; // <-- skip empty default chunks
-
-      int cx = Math.round((float) c.getOriginX() / ((S - 1) * tile));
-      int cz = Math.round((float) c.getOriginZ() / ((S - 1) * tile));
+      int cx = Math.round(c.getOriginX() / ((S - 1) * tile));
+      int cz = Math.round(c.getOriginZ() / ((S - 1) * tile));
       try {
-        byte[] blob = SparseChunkWriter.encodeToBytes(
-            S, c.getHeightsArray(), c.getTexIdsArray());
-        out.put(cx + "_" + cz + ".hmx", blob);
+        out.put(cx + "_" + cz + ".hmx", SparseChunkWriter.encodeToBytes(S, c.getHeightsArray(), c.getTexIdsArray()));
       } catch (IOException ex) {
-        throw new RuntimeException("Failed to encode chunk " + cx + "," + cz, ex);
+        throw new RuntimeException("Encode failed " + cx + "," + cz, ex);
       }
     }
     return out;
   }
 
-  /** A chunk should be saved if it was not a default-flat OR it has edits. */
-  private boolean shouldPersist(int key, TerrainChunk c) {
+  private boolean shouldPersist(int k, TerrainChunk c) {
     if (c == null) return false;
     if (c.isDirty()) return true;
-    // If it arrived from disk (i.e., not default-flat), keep persisting it
-    if (!defaultFlatChunks.contains(key)) return true;
-    // It was default-flat and never edited -> do not save
-    return false;
+    return !defaultFlatChunks.contains(k);
   }
 
+  /** Delta save: only write/overwrite provided chunks/textures; keep everything else in the ZIP. */
   public void saveAll(String path) {
-    map.saveIncludingStaged(path, encodeChunksToHmx());
+    var manifest = buildManifestMerged();
+    var chunksToWrite = encodeChunksToHmx();
+    map.saveDeltaIncludingStaged(path, manifest, chunksToWrite);
   }
 
-  // =========================================================
-  // Accessors & cleanup
-  // =========================================================
+  // ---------- Accessors / cleanup ----------
 
   public void setViewRadius(int r) { this.viewRadius = Math.max(0, r); }
   public boolean hasChunk(int cx, int cz) { return chunks.containsKey(key(cx, cz)); }
@@ -450,11 +353,8 @@ public class TerrainSystem implements HeightSampler {
 
   public void dispose() {
     for (IntMap.Entry<TerrainChunk> e : chunks) e.value.dispose();
-    chunks.clear();
-    defaultFlatChunks.clear();
-    pendingLoads.clear();
-    completed.clear();
+    chunks.clear(); defaultFlatChunks.clear(); pending.clear(); completed.clear();
     if (groundTA != null) { groundTA.dispose(); groundTA = null; }
-    loaderPool.shutdownNow();
+    pool.shutdownNow();
   }
 }

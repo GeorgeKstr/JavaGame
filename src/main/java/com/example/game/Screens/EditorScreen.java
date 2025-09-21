@@ -183,13 +183,13 @@ public class EditorScreen implements Screen {
   private void ensureMapExists(String path) {
     java.nio.file.Path p = java.nio.file.Paths.get(path);
     if (!java.nio.file.Files.exists(p)) {
-      try { NewMapCreator.createBlankMap(path, 64, 1f, 0.5f, 0, 0, 1, 1); }
+      try { NewMapCreator.createBlankMap(path, 64, 2f, 0.5f, 0, 0, 1, 1); }
       catch (Exception e) { throw new RuntimeException("Failed to create blank map at " + path, e); }
     }
   }
 
   private void saveMap() {
-    terrain.buildManifest();
+    terrain.buildManifestMerged();
     terrain.encodeChunksToHmx();
     terrain.saveAll(mapPath);
     Gdx.app.log("Editor", "Saved map: " + mapPath);

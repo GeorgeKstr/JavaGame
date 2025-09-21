@@ -449,4 +449,105 @@ public class MapResource {
     }
     return out.toString();
   }
+    // ============================
+  // Delta ZIP Save (NO DELETES)
+  // ============================
+
+  /**
+   * Delta save:
+   *  - Copies all existing entries from the current .map ZIP
+   *  - Overwrites entries present in overrides (by exact ZIP path)
+   *  - Appends any remaining overrides that didn't exist before
+   * This keeps unknown/unloaded chunk files and any extra entries intact.
+   */
+  public static void saveDelta(Path dstPath,
+                              byte[] existingZipBytes,
+                              Map<String, byte[]> overrides) {
+    try (var zin = new ZipInputStream(new ByteArrayInputStream(existingZipBytes));
+        var zout = new ZipOutputStream(new BufferedOutputStream(Files.newOutputStream(dstPath)))) {
+
+      // Track which override keys were applied
+      Set<String> written = new HashSet<>();
+
+      // 1) Copy-through existing entries (replace if overridden)
+      for (ZipEntry e; (e = zin.getNextEntry()) != null; ) {
+        String name = e.getName();
+        byte[] data = overrides.get(name);
+        zout.putNextEntry(new ZipEntry(name));
+        if (data != null) {
+          zout.write(data);
+          written.add(name);
+        } else {
+          // copy original bytes
+          zin.transferTo(zout);
+        }
+        zout.closeEntry();
+      }
+
+      // 2) Append new entries that didn't exist
+      for (Map.Entry<String, byte[]> en : overrides.entrySet()) {
+        if (written.contains(en.getKey())) continue;
+        zout.putNextEntry(new ZipEntry(en.getKey()));
+        zout.write(en.getValue());
+        zout.closeEntry();
+      }
+    } catch (IOException ex) {
+      throw new RuntimeException("Delta save failed: " + dstPath, ex);
+    }
+  }
+
+  /**
+   * Convenience delta save for maps:
+   *  - Writes manifest.json (override)
+   *  - Writes chunks/*.hmx for given map
+   *  - Writes textures (staged preferred, else from ZIP) only if provided in overrides (we auto-include manifest.ground[] here)
+   *  - Copies everything else unmodified.
+   */
+  public static void saveDelta(String path,
+                              Manifest manifest,
+                              byte[] existingZipBytes,
+                              Map<String, byte[]> chunkFiles,
+                              Map<String, byte[]> textureFiles) {
+    Map<String, byte[]> overrides = new LinkedHashMap<>();
+
+    // manifest.json
+    overrides.put("manifest.json", toJson(manifest).getBytes(StandardCharsets.UTF_8));
+
+    // chunks
+    for (Map.Entry<String, byte[]> e : chunkFiles.entrySet()) {
+      overrides.put("chunks/" + e.getKey(), e.getValue());
+    }
+
+    // explicit textures (path must already be full ZIP path like "textures/ground/...")
+    for (Map.Entry<String, byte[]> e : textureFiles.entrySet()) {
+      overrides.put(e.getKey(), e.getValue());
+    }
+
+    saveDelta(Paths.get(path), existingZipBytes, overrides);
+  }
+
+  /** Delta save that automatically includes staged (or existing) textures referenced by the manifest. */
+  public void saveDeltaIncludingStaged(String path, Manifest manifest, Map<String, byte[]> chunkFiles) {
+    Map<String, byte[]> tex = new LinkedHashMap<>();
+    for (TextureRef tr : manifest.groundTextures) {
+      byte[] data = getTextureBytes(tr.file);
+      if (data == null) throw new RuntimeException("Missing texture: " + tr.file);
+      tex.put(tr.file, data); // ensure referenced textures are present
+    }
+
+    // Build a fresh ZIP by copying through existing entries and overriding the ones we provide
+    saveDelta(path, manifest, this.bytes, chunkFiles, tex);
+
+    // Refresh in-memory bytes from disk so subsequent operations see the latest file
+    try {
+      this.bytes = Files.readAllBytes(Paths.get(path));
+    } catch (IOException e) {
+      // not fatal for runtime, but helpful for hot-edit flows
+      e.printStackTrace();
+    }
+
+    // staged textures were written; clear staging
+    clearStagedTextures();
+  }
+
 }
