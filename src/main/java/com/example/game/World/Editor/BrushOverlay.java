@@ -3,105 +3,128 @@ package com.example.game.World.Editor;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.graphics.Camera;
 import com.badlogic.gdx.graphics.GL20;
+import com.badlogic.gdx.graphics.GL30;
+import com.badlogic.gdx.graphics.PerspectiveCamera;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.math.collision.Ray;
 import com.example.game.World.HeightSampler;
 
 /**
- * Renders a circular brush overlay on the terrain under the mouse.
+ * Terrain brush overlay (classic mode, like your old TerrainSystem circle).
+ * - Uses Camera.getPickRay(sx,sy) (no manual Y flip).
+ * - March + binary refine to hit the heightfield via HeightSampler.
+ * - Conforms the ring to the terrain by sampling at each ring vertex.
+ * - Keeps GL state simple: depth disabled while drawing lines; re-enabled after.
  */
-public class BrushOverlay {
+public final class BrushOverlay {
   private final ShapeRenderer sr = new ShapeRenderer();
-  private final Vector3 center = new Vector3();
 
-  private boolean hasHit = false;
-  private float[] rx, ry, rz;
   private final int segments;
-  private float radiusWorld;
+  private final float[] rx, ry, rz;   // ring vertices
+  private final Vector3 center = new Vector3();
+  private boolean hasHit = false;
+  private float radiusWorld = 1f;
 
   public BrushOverlay(int segments) {
     this.segments = Math.max(16, segments);
-    rx = new float[this.segments];
-    ry = new float[this.segments];
-    rz = new float[this.segments];
+    this.rx = new float[this.segments];
+    this.ry = new float[this.segments];
+    this.rz = new float[this.segments];
   }
 
-/**
- * Update the overlay by casting a ray from the mouse into the terrain.
- */
-public void update(Camera cam, HeightSampler sampler, int brushRadiusTiles, float tileSize) {
-    float mx = Gdx.input.getX();
-    float my = Gdx.input.getY(); // raw Y (don’t flip, Gdx already handles viewport coords)
-    Ray ray = ((com.badlogic.gdx.graphics.PerspectiveCamera) cam).getPickRay(mx, my);
+  /** Update from mouse → world; brushRadiusTiles is in *cells*, tileSize in *meters*. */
+  public void update(Camera cam, HeightSampler sampler, int brushRadiusTiles, float tileSize) {
+    // Get a pick ray in window coords (libGDX handles viewport + Y orientation)
+    int sx = Gdx.input.getX();
+    int sy = Gdx.input.getY();
+    Ray ray = ((PerspectiveCamera) cam).getPickRay(sx, sy);
 
-    Vector3 hit = rayIntersectTerrain(ray, sampler, 0.75f, 8);
+    // Intersect against the terrain heightfield
+    Vector3 hit = rayIntersectTerrain(ray, sampler, Math.max(0.25f, tileSize * 0.5f), 8);
     hasHit = (hit != null);
     if (!hasHit) return;
 
     center.set(hit.x, hit.y + 0.02f, hit.z);
-    radiusWorld = brushRadiusTiles * tileSize;
+    radiusWorld = Math.max(1, brushRadiusTiles) * tileSize;
 
+    // Build ring by re-sampling height along the circle in XZ
     for (int i = 0; i < segments; i++) {
-        float a = (float) (i * Math.PI * 2.0 / segments);
-        float x = center.x + radiusWorld * (float) Math.cos(a);
-        float z = center.z + radiusWorld * (float) Math.sin(a);
-        float y = sampler.heightAt(x, z, center.y) + 0.02f;
-        rx[i] = x;
-        ry[i] = y;
-    rz[i] = z;
+      float a = (float)(i * Math.PI * 2.0 / segments);
+      float x = center.x + radiusWorld * (float)Math.cos(a);
+      float z = center.z + radiusWorld * (float)Math.sin(a);
+      float y = sampler.heightAt(x, z, center.y);
+      if (Float.isNaN(y)) y = center.y; // guard against unloaded cells
+      rx[i] = x; ry[i] = y + 0.02f; rz[i] = z;
     }
-}
+  }
 
-public void draw(Camera cam) {
+  /** Draw the ring on top of the world. Call after your terrain/sky pipeline, before UI. */
+  public void draw(Camera cam) {
     if (!hasHit) return;
+
+    // Make sure we’re drawing to the backbuffer & full viewport (safe across passes)
+    int w = Gdx.graphics.getWidth();
+    int h = Gdx.graphics.getHeight();
+    if (Gdx.gl30 != null) {
+      Gdx.gl30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, 0);
+    } else {
+      Gdx.gl20.glBindFramebuffer(GL20.GL_FRAMEBUFFER, 0);
+    }
+    Gdx.gl.glViewport(0, 0, w, h);
+
+    // Draw lines on top
     Gdx.gl.glDisable(GL20.GL_DEPTH_TEST);
+    Gdx.gl.glDisable(GL20.GL_CULL_FACE);
     Gdx.gl.glLineWidth(2f);
 
     sr.setProjectionMatrix(cam.combined);
     sr.begin(ShapeRenderer.ShapeType.Line);
-    sr.setColor(1f, 1f, 0.2f, 1f);
+    sr.setColor(1f, 1f, 0.2f, 0.95f);
     for (int i = 0; i < segments; i++) {
-        int j = (i + 1) % segments;
-        sr.line(rx[i], ry[i] + 0.02f, rz[i], rx[j], ry[j] + 0.02f, rz[j]);
+      int j = (i + 1) % segments;
+      sr.line(rx[i], ry[i], rz[i], rx[j], ry[j], rz[j]);
     }
     sr.end();
 
     Gdx.gl.glLineWidth(1f);
     Gdx.gl.glEnable(GL20.GL_DEPTH_TEST);
-}
+  }
 
-public void dispose() { sr.dispose(); }
+  public void dispose() { sr.dispose(); }
 
-/**
- * Ray vs. heightfield intersection. Marches forward and binary-refines.
- */
-  public static Vector3 rayIntersectTerrain(Ray ray, HeightSampler s, float step, int refineIters) {
-    float tPrev = 0f, diffPrev = Float.NaN;
+  // --------------------------------------------------------------------------
+  // Classic heightfield raycast: march forward and binary refine at sign change
+  // --------------------------------------------------------------------------
+  private static Vector3 rayIntersectTerrain(Ray ray, HeightSampler s, float step, int refineIters) {
+    float lastT = 0f;
+    float lastDiff = Float.NaN; // ray.y - height
     Vector3 p = new Vector3();
 
-    for (float t = step; t <= 2000f; t += step) {
+    for (float t = step; t <= 4000f; t += step) {
       p.set(ray.origin).mulAdd(ray.direction, t);
       float h = s.heightAt(p.x, p.z, Float.NaN);
-      if (Float.isNaN(h)) { diffPrev = Float.NaN; tPrev = t; continue; }
+      if (Float.isNaN(h)) { lastDiff = Float.NaN; lastT = t; continue; }
 
       float diff = p.y - h;
-      if (!Float.isNaN(diffPrev) && Math.signum(diffPrev) != Math.signum(diff)) {
-        float a = tPrev, b = t;
+      if (!Float.isNaN(lastDiff) && Math.signum(lastDiff) != Math.signum(diff)) {
+        // Bracketed: binary search a few steps
+        float a = lastT, b = t;
         for (int i = 0; i < refineIters; i++) {
           float m = 0.5f * (a + b);
           Vector3 pm = new Vector3(ray.origin).mulAdd(ray.direction, m);
           float hm = s.heightAt(pm.x, pm.z, Float.NaN);
           float dm = pm.y - hm;
-          if (dm > 0) a = m; else b = m;
+          if (dm > 0f) a = m; else b = m;
         }
-        float m = 0.5f * (a + b);
-        Vector3 hit = new Vector3(ray.origin).mulAdd(ray.direction, m);
+        float hitT = 0.5f * (a + b);
+        Vector3 hit = new Vector3(ray.origin).mulAdd(ray.direction, hitT);
         hit.y = s.heightAt(hit.x, hit.z, hit.y);
         return hit;
       }
-      diffPrev = diff; tPrev = t;
+      lastDiff = diff;
+      lastT = t;
     }
-    return null;
+    return null; // no intersection in range
   }
 }

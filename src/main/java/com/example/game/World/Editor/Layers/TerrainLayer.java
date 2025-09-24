@@ -425,21 +425,4 @@ public class TerrainLayer implements EditorLayer {
         }
         return false;
     }
-
-    private void applyAtMouse() {
-        float mx = Gdx.input.getX(), my = Gdx.input.getY();
-        var ray = EditorContext.cam().getPickRay(mx, my);
-        var hit = BrushOverlay.rayIntersectTerrain(ray, terrain, 0.75f, 8);
-        if (hit == null) return;
-
-        int gx = Math.round(hit.x / terrain.getTileSize());
-        int gz = Math.round(hit.z / terrain.getTileSize());
-        boolean changed = false;
-        switch (state.tool()) {
-            case RAISE -> changed = terrain.editHeightsCircle(gx, gz, state.radius(), state.delta());
-            case LOWER -> changed = terrain.editHeightsCircle(gx, gz, state.radius(), (short)-state.delta());
-            case PAINT -> changed = terrain.paintTexCircle(gx, gz, state.radius(), (byte)state.texId());
-        }
-        if (changed) terrain.rebuildDirtyChunks();
-    }
 }
