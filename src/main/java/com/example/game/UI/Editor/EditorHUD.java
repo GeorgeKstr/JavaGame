@@ -42,7 +42,7 @@ public final class EditorHUD implements Disposable {
   public Stage stage() { return stage; }
   public Skin skin() { return skin; }
 
-  public void build(LayerManager layers, Callbacks cb, float initialHour,
+  public void build(LayerManager layers, Callbacks cb, float initialHour, float initialWarmth, float initialSunSize,
                     float initialRays, int initialDist) {
     // --- top bar
     tabsBar.clear();
@@ -78,7 +78,7 @@ public final class EditorHUD implements Disposable {
 
     // --- right controls
     rightPane.clear(); rightPane.top().right().pad(8);
-    buildRightControls(rightPane, cb, initialHour, initialRays, initialDist);
+    buildRightControls(rightPane, cb, initialHour, initialWarmth, initialSunSize, initialRays, initialDist);
 
     // --- layout
     root.clear();
@@ -96,7 +96,7 @@ public final class EditorHUD implements Disposable {
   }
 
   private void buildRightControls(Table parent, Callbacks cb,
-                                  float initialHour, float initialRays, int initialDist) {
+                                  float initialHour, float initialWarmth, float initialSunSize,float initialRays, int initialDist) {
     parent.add(new Label("Sky / Time", skin, "title")).left().row();
 
     hourLabel = new Label(formatHour(initialHour), skin);
@@ -113,10 +113,10 @@ public final class EditorHUD implements Disposable {
     });
     parent.add(hourSlider).width(240).height(32).padBottom(8).row();
 
-    final Label sizeLbl = new Label("Sun Size: 0.90°", skin);
+    final Label sizeLbl = new Label(String.format("Sun Size: %.2f°", initialSunSize), skin);
     parent.add(sizeLbl).left().padTop(8).row();
     final Slider sizeSlider = new Slider(0.3f, 3.0f, 0.01f, false, skin);
-    sizeSlider.setValue(0.90f);
+    sizeSlider.setValue(initialSunSize);
     sizeSlider.addListener(new ChangeListener() {
       @Override public void changed(ChangeEvent event, Actor actor) {
         float v = sizeSlider.getValue();
@@ -126,10 +126,10 @@ public final class EditorHUD implements Disposable {
     });
     parent.add(sizeSlider).width(240).height(32).row();
 
-    final Label warmLbl = new Label("Warmth: 0.35", skin);
+    final Label warmLbl = new Label(String.format("Warmth: %.2f", initialWarmth), skin);
     parent.add(warmLbl).left().padTop(8).row();
     final Slider warmSlider = new Slider(0f, 1f, 0.01f, false, skin);
-    warmSlider.setValue(0.35f);
+    warmSlider.setValue(initialWarmth);
     warmSlider.addListener(new ChangeListener() {
       @Override public void changed(ChangeEvent event, Actor actor) {
         float v = warmSlider.getValue();

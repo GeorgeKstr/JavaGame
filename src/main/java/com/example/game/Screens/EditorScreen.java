@@ -5,7 +5,7 @@ import com.badlogic.gdx.graphics.*;
 import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.scenes.scene2d.ui.Dialog;
-
+import com.example.game.Config.SettingsStore;
 import com.example.game.App.GameApp;
 import com.example.game.Render.Pipeline.RenderContext;
 import com.example.game.Render.Pipeline.RenderPipeline;
@@ -60,33 +60,74 @@ public class EditorScreen implements Screen {
     map = MapResource.loadFromFile(mapPath);
     terrain = new TerrainSystem(map);
 
-    // Render pipeline (moved out)
+    // Initial values from settings
+    hour = settings.timeOfDayHour;           // persist time-of-day
     updateSunFromHour();
+
+    // Render pipeline
     ctx = new RenderContext(cam, sunDirWorld);
-    pipeline = RenderBootstrap.build(ctx, terrain,
-        RenderBootstrap.Config.defaultConfig()); // tweak birds/rays here centrally
+    pipeline = RenderBootstrap.build(ctx, terrain, RenderBootstrap.Config.defaultConfig());
+
+    // Apply persisted visual params before UI builds
+    pipeline.get(SkyPass.class).setSunSizeDeg(settings.sunSizeDeg);
+    pipeline.get(SkyPass.class).setWarmth(settings.skyWarmth);
+    pipeline.get(GodRaysPass.class).setExposure(settings.godRaysExposure);
+    pipeline.get(TerrainPass.class).setViewRadius(settings.viewRadiusChunks);
 
     // HUD
     hud = new EditorHUD();
     layers.add(new TerrainLayer(terrain, hud.skin()));
     layers.add(new WalkLayer(terrain, hud.skin()));
+
     hud.build(layers, new EditorHUD.Callbacks() {
       @Override public void onBack() { app.goToMenu(); }
-      @Override public void onSave() { saveMap(); }
-      @Override public void onHourChanged(float h) { hour = h; updateSunFromHour(); }
-      @Override public void onSunSizeChanged(float deg) { pipeline.get(SkyPass.class).setSunSizeDeg(deg); }
-      @Override public void onWarmthChanged(float w) { pipeline.get(SkyPass.class).setWarmth(w); }
-      @Override public void onGodRaysChanged(float e) { pipeline.get(GodRaysPass.class).setExposure(e); }
-      @Override public void onViewDistanceChanged(int r) { pipeline.get(TerrainPass.class).setViewRadius(r); }
-    }, hour, pipeline.get(GodRaysPass.class).exposure, 3);
 
-    // Input: UI first, then router (generic scheme lives inside EditorInputRouter)
+      @Override public void onSave() { saveMap(); }
+
+      @Override public void onHourChanged(float h) {
+        hour = h;
+        settings.timeOfDayHour = h;
+        SettingsStore.save(settings);
+        updateSunFromHour();
+      }
+
+      @Override public void onSunSizeChanged(float deg) {
+        pipeline.get(SkyPass.class).setSunSizeDeg(deg);
+        settings.sunSizeDeg = deg;
+        SettingsStore.save(settings);
+      }
+
+      @Override public void onWarmthChanged(float w) {
+        pipeline.get(SkyPass.class).setWarmth(w);
+        settings.skyWarmth = w;
+        SettingsStore.save(settings);
+      }
+
+      @Override public void onGodRaysChanged(float e) {
+        pipeline.get(GodRaysPass.class).setExposure(e);
+        settings.godRaysExposure = e;
+        SettingsStore.save(settings);
+      }
+
+      @Override public void onViewDistanceChanged(int r) {
+        pipeline.get(TerrainPass.class).setViewRadius(r);
+        settings.viewRadiusChunks = r;
+        SettingsStore.save(settings);
+      }
+    },
+    // Initial values for HUD sliders/knobs:
+    /* initialHour */ settings.timeOfDayHour,
+    /* initialWarmth */ settings.skyWarmth,
+    /* initialSunSize */ settings.sunSizeDeg,
+    /* initialGodRays */ settings.godRaysExposure,
+    /* initialViewRadius */ settings.viewRadiusChunks
+    );
+
+    // Input
     inputRouter = EditorBootstrap.inputRouter(layers, edCam, cam, terrain);
-    Gdx.input.setInputProcessor(new InputMultiplexer(
-      hud.stage(),
-      inputRouter
-    ));
+    Gdx.input.setInputProcessor(new InputMultiplexer(hud.stage(), inputRouter));
   }
+
 
   @Override public void render(float dt) {
     elapsed += dt;
@@ -140,19 +181,34 @@ public class EditorScreen implements Screen {
   @Override public void resume() {}
   @Override public void hide() {}
   @Override public void dispose() {
+    SettingsStore.save(settings); // ensure last UI tweaks persist
     if (pipeline != null) pipeline.close();
     if (hud != null) hud.dispose();
     if (terrain != null) terrain.dispose();
   }
 
-  // ---- helpers ----
   private void updateSunFromHour() {
-    float t = (hour % 24f) / 24f;
-    float az = t * MathUtils.PI2;
-    float elev = MathUtils.degreesToRadians * 75f * MathUtils.sin(az);
+    // hour: 0..24  ->  azimuth: 0..2π
+    float t  = (hour % 24f) / 24f;
+    float az = t * MathUtils.PI2; // 0: north (midnight), π/2: east (06:00), π: south (12:00), 3π/2: west (18:00)
+
+    // Max elevation at local noon; 0 at sunrise/sunset; negative at night.
+    // Using a simple equinox-like arc (no latitude/season yet):
+    float maxElevDeg = 75f; // tweak to taste, e.g., 60–85
+    float maxElevRad = MathUtils.degreesToRadians * maxElevDeg;
+
+    // Correct day arc: peak at az=π (noon), zero at π/2 & 3π/2 (rise/set), min at 0 (midnight).
+    float elev = maxElevRad * MathUtils.sin(az - MathUtils.PI / 2f);
+
     float sinE = MathUtils.sin(elev), cosE = MathUtils.cos(elev);
-    sunDirWorld.set(MathUtils.sin(az) * cosE, sinE, -MathUtils.cos(az) * cosE).nor();
+
+    // World orientation (unchanged): az=0 -> north (-Z), π/2 -> east (+X), π -> south (+Z), 3π/2 -> west (-X)
+    sunDirWorld.set(MathUtils.sin(az) * cosE,  // X
+                    sinE,                      // Y
+                  -MathUtils.cos(az) * cosE   // Z
+                  ).nor();
   }
+
   private void ensureMapExists(String path) {
     java.nio.file.Path p = java.nio.file.Paths.get(path);
     if (!java.nio.file.Files.exists(p)) {

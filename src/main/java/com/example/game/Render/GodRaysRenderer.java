@@ -32,7 +32,6 @@ public class GodRaysRenderer {
     private final Vector2 lightNdc = new Vector2();   // [-1..1]
     private final Vector2 lightUv  = new Vector2();   // [0..1]
     private final Vector3 tmp = new Vector3();
-    private final Matrix4 tmpM = new Matrix4();
 
     public void init(int screenW, int screenH) {
         ShaderProgram.pedantic = false;
