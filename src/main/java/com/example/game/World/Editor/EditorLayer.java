@@ -1,6 +1,7 @@
 package com.example.game.World.Editor;
 
 import com.badlogic.gdx.graphics.Camera;
+import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.scenes.scene2d.ui.Skin;
 import com.badlogic.gdx.scenes.scene2d.ui.Table;
 
@@ -18,9 +19,13 @@ public interface EditorLayer {
   /** Build (or rebuild) this layer's tools into the provided left pane. */
   void buildUI(Table leftPane, Skin skin);
 
-  /** Let the layer consume structured input (optional). */
-  default boolean handleInput(EditorInputRouter.InputEvent e) { return false; }
+  // -------- Input hooks (router-agnostic) --------
+  /** World-space pointer events (router provides world hit). */
+  default void onPointerDown(Camera cam, Vector3 world, int button, boolean shift, boolean ctrl) {}
+  default void onPointerDrag(Camera cam, Vector3 world, int button, boolean shift, boolean ctrl) {}
+  default void onPointerUp  (Camera cam, Vector3 world, int button, boolean shift, boolean ctrl) {}
 
+  /** Optional scroll hook (screen-space scroll amounts). */
   default boolean scrolled(float amountX, float amountY) { return false; }
 
   /** Persistence hooks (optional now). */

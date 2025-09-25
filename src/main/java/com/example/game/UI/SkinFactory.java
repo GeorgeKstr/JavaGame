@@ -88,6 +88,16 @@ public class SkinFactory {
     toggle.checked = tinted(whiteTex, new Color(0.16f, 0.35f, 0.22f, 1f)); // green-ish when checked
     skin.add("toggle", toggle);
 
+    // ---- Toggle TextButton style ----
+    TextButton.TextButtonStyle toggleTBS = new TextButton.TextButtonStyle();
+    toggleTBS.up       = skin.getDrawable("btn-up");
+    toggleTBS.over     = skin.getDrawable("btn-over");
+    toggleTBS.down     = skin.getDrawable("btn-down");
+    toggleTBS.checked  = tinted(whiteTex, new Color(0.16f, 0.35f, 0.22f, 1f)); // green-ish when checked
+    toggleTBS.font     = font;
+    toggleTBS.fontColor = Color.WHITE;
+    skin.add("toggle", toggleTBS);
+
     // ---- CheckBox style ----
     CheckBox.CheckBoxStyle cbs = new CheckBox.CheckBoxStyle();
     cbs.checkboxOff = skin.getDrawable("cb-off");
@@ -113,6 +123,26 @@ public class SkinFactory {
     tfs.cursor = tinted(whiteTex, Color.WHITE);
     tfs.selection = tinted(whiteTex, new Color(1f,1f,1f,0.25f));
     skin.add("default", tfs);
+
+    // ---- List style (used by SelectBox's dropdown) ----
+    List.ListStyle listStyle = new List.ListStyle();
+    listStyle.font = font;
+    listStyle.fontColorSelected = Color.WHITE;
+    listStyle.fontColorUnselected = Color.LIGHT_GRAY;
+    listStyle.selection = tinted(whiteTex, new Color(1f, 1f, 1f, 0.22f)); // highlight row
+    listStyle.background = skin.getDrawable("bg"); // subtle bg behind rows
+    skin.add("default", listStyle);
+
+    // ---- SelectBox style ----
+    SelectBox.SelectBoxStyle sb = new SelectBox.SelectBoxStyle();
+    sb.font = font;
+    sb.fontColor = Color.WHITE;
+    sb.background = skin.getDrawable("btn-up");   // closed state
+    sb.scrollStyle = skin.get(ScrollPane.ScrollPaneStyle.class); // reuse your default scroll
+    sb.listStyle = listStyle;
+    sb.backgroundOver = skin.getDrawable("btn-over");
+    sb.backgroundOpen = skin.getDrawable("btn-over"); // when dropdown is open
+    skin.add("default", sb);
 
     Slider.SliderStyle sliderH = new Slider.SliderStyle();
     NinePatchDrawable track = tinted(whiteTex, scrollTrack);

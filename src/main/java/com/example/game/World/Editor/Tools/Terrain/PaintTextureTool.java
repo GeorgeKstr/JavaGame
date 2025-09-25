@@ -1,6 +1,5 @@
 package com.example.game.World.Editor.Tools.Terrain;
 
-import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.graphics.Pixmap;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.scenes.scene2d.Actor;
@@ -32,7 +31,7 @@ public final class PaintTextureTool extends AbstractBrushTool {
   private static final int COLS = 3;     // thumbnails per row
 
   public PaintTextureTool(TerrainSystem terrain, BrushSettings brush){
-    super(brush);
+    super(brush, terrain);
     this.terrain = terrain;
     this.map = terrain.getMap();
   }

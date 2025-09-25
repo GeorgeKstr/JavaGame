@@ -1,6 +1,7 @@
 package com.example.game.World.Editor;
 
 import com.badlogic.gdx.graphics.Camera;
+import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.scenes.scene2d.ui.*;
 import com.example.game.World.Editor.Tools.Tool;
 
@@ -16,7 +17,7 @@ public abstract class BaseToolLayer implements EditorLayer {
     this.id = id; this.display = displayName;
   }
 
-  protected void addTool(Tool t) { tools.add(t); if (active == null) active = t; }
+  protected void addTool(Tool t) { tools.add(t); if (active == null) { active = t; t.onSelected();} }
 
   @Override public String id() { return id; }
   @Override public String displayName() { return display; }
@@ -45,30 +46,32 @@ public abstract class BaseToolLayer implements EditorLayer {
     }
     parent.add(bar).left().row();
     parent.add(new Label(display + " Tools", skin, "title")).left().padTop(6).row();
-
     // tool-specific UI goes here
     rebuildToolUI(parent, skin);
-  }
+}
 
-  private void rebuildToolUI(Table parent, Skin skin) {
+private void rebuildToolUI(Table parent, Skin skin) {
     // remove everything below the header rows and reconstruct
     while (parent.getChildren().size > 2) parent.removeActorAt(2, true);
+    parent.add(new Label("Active Tool: " + (active != null ? active.name() : "None"), skin, "default")).left().padBottom(6).row();
     Table toolUI = new Table(); toolUI.top().left();
     if (active != null) active.buildUI(toolUI, skin);
     parent.add(toolUI).left().top().growX().row();
   }
 
   /** Forward input to active tool (layers can override if they need hit-testing first). */
-  public void onPointerDown(Camera cam, com.badlogic.gdx.math.Vector3 world, int button, boolean sh, boolean ctrl) {
+  public void onPointerDown(Camera cam, Vector3 world, int button, boolean sh, boolean ctrl) {
     if (active != null) active.onPointerDown(world, button, sh, ctrl);
   }
-  public void onPointerDrag(Camera cam, com.badlogic.gdx.math.Vector3 world, int button, boolean sh, boolean ctrl) {
+  public void onPointerDrag(Camera cam, Vector3 world, int button, boolean sh, boolean ctrl) {
     if (active != null) active.onPointerDrag(world, button, sh, ctrl);
   }
-  public void onPointerUp(Camera cam, com.badlogic.gdx.math.Vector3 world, int button, boolean sh, boolean ctrl) {
+  public void onPointerUp(Camera cam, Vector3 world, int button, boolean sh, boolean ctrl) {
     if (active != null) active.onPointerUp(world, button, sh, ctrl);
   }
 
   @Override public void update(float dt) { if (active != null) active.update(dt, EditorContext.getCamera()); }
-  @Override public void render3D(com.badlogic.gdx.graphics.Camera cam) { /* optional: tool previews */ }
+  @Override public void render3D(Camera cam) {
+    if (active != null) active.render3D(cam);
+  }
 }

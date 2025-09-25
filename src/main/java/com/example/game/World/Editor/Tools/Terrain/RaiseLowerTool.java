@@ -1,18 +1,18 @@
 package com.example.game.World.Editor.Tools.Terrain;
 
 import com.badlogic.gdx.graphics.Camera;
-import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.scenes.scene2d.ui.*;
 import com.example.game.World.TerrainSystem;
+import com.example.game.World.Editor.BrushOverlay;
 import com.example.game.World.Editor.Tools.AbstractBrushTool;
 import com.example.game.World.Editor.Tools.BrushSettings;
 
 public final class RaiseLowerTool extends AbstractBrushTool {
-  private final TerrainSystem terrain;
+ 
   private boolean lowerMode = false;
 
-  public RaiseLowerTool(TerrainSystem terrain, BrushSettings sharedBrush){ super(sharedBrush); this.terrain = terrain; }
+  public RaiseLowerTool(TerrainSystem terrain, BrushSettings sharedBrush){ super(sharedBrush, terrain); }
 
   @Override public String name() { return "Raise/Lower"; }
 
@@ -30,5 +30,4 @@ public final class RaiseLowerTool extends AbstractBrushTool {
     //terrain.brushHeight(world.x, world.z, brush.radius, sgn*brush.strength, brush.falloff);
   }
 
-  @Override public void update(float dt, Camera cam) { /* optional: show brush decal */ }
 }

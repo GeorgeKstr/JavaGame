@@ -8,6 +8,7 @@ public class Settings {
   public float panSpeedFactor  = 0.0025f;   // world units per px * distance
   public int   brushMaxRadius  = 64;        // clamp
   public boolean brushAlwaysOnTop = true;   // draw over terrain
+  public float editorMoveSpeed = 800f;    // units per second
 
   // --- Terrain / streaming ---
   public int   viewRadiusChunks = 3;        // ±radius

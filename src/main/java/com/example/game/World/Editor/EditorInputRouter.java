@@ -1,71 +1,178 @@
 package com.example.game.World.Editor;
 
+import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.InputAdapter;
+import com.badlogic.gdx.graphics.Camera;
+import com.badlogic.gdx.math.Vector3;
 
-public class EditorInputRouter extends InputAdapter {
-  public static class InputEvent {
-    public enum Type { MouseDown, MouseDrag, MouseUp, KeyDown, Scroll }
-    public final Type type;
-    public final int x, y, keycode;
-    public final boolean buttonLeft, buttonRight, buttonMiddle;
-    public final float scrollY;
+/**
+ * Unified editor input:
+ * - LMB: send to active tool (via BaseToolLayer)
+ * - MMB drag: orbit; Shift+MMB drag: pan
+ * - Wheel: zoom (positive = zoom out; invert in Access if desired)
+ * - RMB drag or WASD: move
+ *
+ * Use with:
+ *   new EditorInputRouter(new EditorInputRouter.Access() { ... })
+ * and (optionally) call router.update(dt) each frame for WASD.
+ */
+public final class EditorInputRouter extends InputAdapter {
 
-    public InputEvent(Type type, int x, int y, int keycode,
-                      boolean l, boolean r, boolean m, float scrollY) {
-      this.type=type; this.x=x; this.y=y; this.keycode=keycode;
-      this.buttonLeft=l; this.buttonRight=r; this.buttonMiddle=m; this.scrollY=scrollY;
+  /** Host-provided hooks (camera ops, picking, active layer). */
+  public interface Access {
+    Camera cam();
+    EditorLayer activeLayer();
+
+    void cameraOrbit(float dx, float dy);
+    void cameraPan(float dx, float dy);
+    void cameraZoom(float amount);
+
+    /** WASD-style movement; dt provided by caller (update). */
+    void moveWASD(boolean w, boolean a, boolean s, boolean d, float dt);
+
+    /**
+     * Ray-pick the world at the current mouse; write to 'out' and return that same instance.
+     * Return null if nothing was hit.
+     */
+    Vector3 pickOnTerrain(int screenX, int screenY, Vector3 out);
+  }
+
+  private final Access access;
+
+  // mouse button state
+  private boolean lmbDown = false;
+  private boolean mmbDown = false;
+  private boolean rmbDown = false;
+
+  // scratch
+  private final Vector3 tmpWorld = new Vector3();
+
+  public EditorInputRouter(Access access) {
+    this.access = access;
+  }
+
+  // ------------------------------------------------------------
+  // Mouse
+  // ------------------------------------------------------------
+
+  @Override
+  public boolean touchDown(int screenX, int screenY, int pointer, int button) {
+    switch (button) {
+      case Input.Buttons.LEFT:
+        lmbDown = true;
+        sendTool(screenX, screenY, true);
+        return true;
+      case Input.Buttons.MIDDLE:
+        mmbDown = true;
+        return true;
+      case Input.Buttons.RIGHT:
+        rmbDown = true;
+        return true;
+      default:
+        return false;
     }
   }
 
-  public interface CameraCallbacks {
-    void orbit(float dx, float dy);
-    void pan(float dx, float dy);
-    void zoom(float amountY);
-  }
+  @Override
+  public boolean touchDragged(int screenX, int screenY, int pointer) {
+    if (mmbDown) {
+      // MMB drag: orbit; Shift+MMB: pan
+      boolean shift = Gdx.input.isKeyPressed(Input.Keys.SHIFT_LEFT) || Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT);
+      float dx = Gdx.input.getDeltaX();
+      float dy = -Gdx.input.getDeltaY();
+      if (!shift) access.cameraOrbit(dx, dy); else access.cameraPan(dx, dy);
+      return true;
+    }
 
-  private final LayerManager lm;
-  private final CameraCallbacks camCB;
-  private int lastX, lastY;
-  private boolean orbiting=false, panning=false;
+    if (rmbDown) {
+      // RMB drag → move like WASD using deltas
+      float dx = Gdx.input.getDeltaX();
+      float dy = -Gdx.input.getDeltaY();
+      // Map drag to movement intent
+      boolean w = dy > 0f, s = dy < 0f, a = dx < 0f, d = dx > 0f;
+      access.moveWASD(w, a, s, d, Gdx.graphics.getDeltaTime());
+      return true;
+    }
 
-  public EditorInputRouter(LayerManager lm, CameraCallbacks camCB) {
-    this.lm = lm; this.camCB = camCB;
-  }
+    if (lmbDown) {
+      sendTool(screenX, screenY, false);
+      return true;
+    }
 
-  @Override public boolean scrolled(float amountX, float amountY) {
-    if (lm.scrolled(amountX, amountY)) return true;
-    camCB.zoom(amountY); return true;
-  }
-
-  @Override public boolean touchDown (int x, int y, int pointer, int button) {
-    boolean l = button==Input.Buttons.LEFT, r = button==Input.Buttons.RIGHT, m = button==Input.Buttons.MIDDLE;
-    if (lm.handleInput(new InputEvent(InputEvent.Type.MouseDown, x,y,0,l,r,m,0))) return true;
-
-    if (m) { orbiting=true; panning=false; lastX=x; lastY=y; return true; }
-    if (r) { panning=true;  orbiting=false; lastX=x; lastY=y; return true; }
-    return l; // let LMB be handled by layer only
-  }
-
-  @Override public boolean touchDragged (int x, int y, int pointer) {
-    if (lm.handleInput(new InputEvent(InputEvent.Type.MouseDrag, x,y,0,
-        Input.Buttons.LEFT==1,Input.Buttons.RIGHT==1,Input.Buttons.MIDDLE==1,0))) return true;
-
-    float dx=x-lastX, dy=y-lastY;
-    if (orbiting) { camCB.orbit(dx, dy); lastX=x; lastY=y; return true; }
-    if (panning)  { camCB.pan(dx, dy);   lastX=x; lastY=y; return true; }
     return false;
   }
 
-  @Override public boolean touchUp (int x, int y, int pointer, int button) {
-    boolean l = button==Input.Buttons.LEFT, r = button==Input.Buttons.RIGHT, m = button==Input.Buttons.MIDDLE;
-    if (lm.handleInput(new InputEvent(InputEvent.Type.MouseUp, x,y,0,l,r,m,0))) return true;
-    if (m) { orbiting=false; return true; }
-    if (r) { panning=false;  return true; }
-    return false;
+  @Override
+  public boolean touchUp(int screenX, int screenY, int pointer, int button) {
+    switch (button) {
+      case Input.Buttons.LEFT:
+        lmbDown = false;
+        sendToolUp(screenX, screenY);
+        return true;
+      case Input.Buttons.MIDDLE:
+        mmbDown = false;
+        return true;
+      case Input.Buttons.RIGHT:
+        rmbDown = false;
+        return true;
+      default:
+        return false;
+    }
   }
 
-  @Override public boolean keyDown(int keycode) {
-    return lm.handleInput(new InputEvent(InputEvent.Type.KeyDown, 0,0,keycode,false,false,false,0));
+  @Override
+  public boolean scrolled(float amountX, float amountY) {
+    access.cameraZoom(amountY); // positive usually means scroll down
+    return true;
+  }
+
+  // ------------------------------------------------------------
+  // Keyboard
+  // ------------------------------------------------------------
+
+  /** Call this each frame to keep keyboard movement responsive. */
+  public void update(float dt) {
+    boolean w = Gdx.input.isKeyPressed(Input.Keys.W);
+    boolean a = Gdx.input.isKeyPressed(Input.Keys.A);
+    boolean s = Gdx.input.isKeyPressed(Input.Keys.S);
+    boolean d = Gdx.input.isKeyPressed(Input.Keys.D);
+    if (w || a || s || d) {
+      access.moveWASD(w, a, s, d, dt);
+    }
+  }
+
+  // ------------------------------------------------------------
+  // Tool dispatch (to active layer if it's a BaseToolLayer)
+  // ------------------------------------------------------------
+
+  private void sendTool(int screenX, int screenY, boolean down) {
+    EditorLayer layer = access.activeLayer();
+    if (layer == null) return;
+
+    if (access.pickOnTerrain(screenX, screenY, tmpWorld) == null) return;
+
+    boolean shift = Gdx.input.isKeyPressed(Input.Keys.SHIFT_LEFT) || Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT);
+    boolean ctrl  = Gdx.input.isKeyPressed(Input.Keys.CONTROL_LEFT) || Gdx.input.isKeyPressed(Input.Keys.CONTROL_RIGHT);
+
+    if (layer instanceof BaseToolLayer) {
+      BaseToolLayer btl = (BaseToolLayer) layer;
+      if (down) btl.onPointerDown(access.cam(), tmpWorld, Input.Buttons.LEFT, shift, ctrl);
+      else      btl.onPointerDrag(access.cam(), tmpWorld, Input.Buttons.LEFT, shift, ctrl);
+    }
+  }
+
+  private void sendToolUp(int screenX, int screenY) {
+    EditorLayer layer = access.activeLayer();
+    if (layer == null) return;
+
+    if (access.pickOnTerrain(screenX, screenY, tmpWorld) == null) return;
+
+    boolean shift = Gdx.input.isKeyPressed(Input.Keys.SHIFT_LEFT) || Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT);
+    boolean ctrl  = Gdx.input.isKeyPressed(Input.Keys.CONTROL_LEFT) || Gdx.input.isKeyPressed(Input.Keys.CONTROL_RIGHT);
+
+    if (layer instanceof BaseToolLayer) {
+      ((BaseToolLayer) layer).onPointerUp(access.cam(), tmpWorld, Input.Buttons.LEFT, shift, ctrl);
+    }
   }
 }

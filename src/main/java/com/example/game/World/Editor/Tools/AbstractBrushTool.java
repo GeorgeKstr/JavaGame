@@ -1,14 +1,22 @@
 package com.example.game.World.Editor.Tools;
 
+import com.badlogic.gdx.graphics.Camera;
 import com.badlogic.gdx.scenes.scene2d.Actor;
 import com.badlogic.gdx.scenes.scene2d.ui.*;
 import com.badlogic.gdx.scenes.scene2d.utils.ChangeListener;
+import com.example.game.World.TerrainSystem;
+import com.example.game.World.Editor.BrushOverlay;
 
 /** Base for brush-style tools: provides shared BrushSettings + a small brush UI. */
 public abstract class AbstractBrushTool implements Tool {
   protected final BrushSettings brush;
+    private final TerrainSystem terrain;
+  private BrushOverlay overlay;
 
-  protected AbstractBrushTool(BrushSettings sharedBrush) { this.brush = sharedBrush; }
+  protected AbstractBrushTool(BrushSettings sharedBrush, TerrainSystem terrain) { 
+    this.brush = sharedBrush; 
+    this.terrain = terrain;
+  }
 
   /** Common brush UI (radius/strength/falloff). Call from buildUI() in subclasses. */
   protected void addBrushUI(Table parent, Skin skin) {
@@ -59,4 +67,19 @@ public abstract class AbstractBrushTool implements Tool {
     t.add(f).width(220).row();
     parent.add(t).left().padBottom(8).row();
   }
+
+  @Override public void onSelected() {
+    if (overlay == null) overlay = new BrushOverlay(64);
+  }
+
+  @Override public void onDeselected() {
+    if (overlay != null) { overlay.dispose(); overlay = null; }
+  }
+
+  @Override public void update(float dt, Camera cam) { 
+    int radiusTiles = Math.max(1, Math.round(brush.radius / terrain.getTileSize()));
+    if (overlay != null) overlay.update(cam, terrain, radiusTiles, terrain.getTileSize());
+  }
+
+  @Override public void render3D(Camera cam) { if (overlay != null) overlay.draw(cam);}
 }
