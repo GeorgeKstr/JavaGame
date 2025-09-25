@@ -31,6 +31,7 @@ public class EditorScreen implements Screen {
   private final LayerManager layers = new LayerManager();
   private final Vector3 sunDirWorld = new Vector3(-0.4f, -1f, -0.3f).nor();
   private float hour = 12f, elapsed = 0f;
+  private EditorInputRouter inputRouter;
 
   // world
   private TerrainSystem terrain;
@@ -80,9 +81,10 @@ public class EditorScreen implements Screen {
     }, hour, pipeline.get(GodRaysPass.class).exposure, 3);
 
     // Input: UI first, then router (generic scheme lives inside EditorInputRouter)
+    inputRouter = EditorBootstrap.inputRouter(layers, edCam, cam, terrain);
     Gdx.input.setInputProcessor(new InputMultiplexer(
       hud.stage(),
-      EditorBootstrap.inputRouter(layers, edCam, cam, terrain)
+      inputRouter
     ));
   }
 
@@ -118,7 +120,7 @@ public class EditorScreen implements Screen {
     hud.setFps(Gdx.graphics.getFramesPerSecond());
     hud.actAndDraw(dt);
 
-    // Quick keys
+    inputRouter.update(dt); // for WASD movement
     if (Gdx.input.isKeyJustPressed(Input.Keys.F5)) saveMap();
     if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
       Dialog dlg = new Dialog("Are you sure?", hud.skin()) {

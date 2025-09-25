@@ -87,8 +87,8 @@ public final class EditorInputRouter extends InputAdapter {
 
     if (rmbDown) {
       // RMB drag → move like WASD using deltas
-      float dx = Gdx.input.getDeltaX();
-      float dy = -Gdx.input.getDeltaY();
+      float dx = -Gdx.input.getDeltaX();
+      float dy = Gdx.input.getDeltaY();
       // Map drag to movement intent
       boolean w = dy > 0f, s = dy < 0f, a = dx < 0f, d = dx > 0f;
       access.moveWASD(w, a, s, d, Gdx.graphics.getDeltaTime());
@@ -123,6 +123,15 @@ public final class EditorInputRouter extends InputAdapter {
 
   @Override
   public boolean scrolled(float amountX, float amountY) {
+    EditorLayer layer = access.activeLayer();
+    if (layer != null) {
+      if (layer instanceof BaseToolLayer && ((BaseToolLayer) layer).getActiveTool() != null) {
+        if (((BaseToolLayer) layer).getActiveTool().scrolled(amountX, amountY)) {
+          return true;
+        }
+      }
+      if (layer.scrolled(amountX, amountY)) return true;
+    }
     access.cameraZoom(amountY); // positive usually means scroll down
     return true;
   }

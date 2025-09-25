@@ -23,4 +23,5 @@ public interface Tool {
   default void onPointerDrag(Vector3 world, int button, boolean shift, boolean ctrl) {}
   default void onPointerUp(Vector3 world, int button, boolean shift, boolean ctrl) {}
   default void render3D(Camera cam) {}
+  default boolean scrolled(float amountX, float amountY) {return false;};
 }

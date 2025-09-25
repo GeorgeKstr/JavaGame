@@ -22,7 +22,7 @@ public final class LayerManager {
     if (byId.containsKey(layer.id())) return; // ignore duplicates by id
     ordered.add(layer);
     byId.put(layer.id(), layer);
-    if (active == null) active = layer;
+    if (active == null) {active = layer; layer.onActivate();}
   }
 
   /** All layers in insertion order (read-only view). */

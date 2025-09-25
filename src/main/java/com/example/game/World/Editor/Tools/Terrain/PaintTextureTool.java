@@ -191,7 +191,7 @@ public final class PaintTextureTool extends AbstractBrushTool {
     float tile = terrain.getTileSize();
     int gx = (int)Math.floor(world.x / tile);
     int gz = (int)Math.floor(world.z / tile);
-    int rCells = Math.max(1, Math.round(brush.radius / tile));
+    int rCells = Math.max(1, Math.round(brush.getRadius() / tile));
     byte texId = (byte)Math.max(0, Math.min(255, layerIndex));
     if (terrain.paintTexCircle(gx, gz, rCells, texId)) {
       terrain.rebuildDirtyChunks();

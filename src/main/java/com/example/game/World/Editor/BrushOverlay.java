@@ -127,4 +127,8 @@ public final class BrushOverlay {
     }
     return null; // no intersection in range
   }
+
+  public void setRadius(float radius) {
+    this.radiusWorld = Math.max(1f, radius);
+  }
 }

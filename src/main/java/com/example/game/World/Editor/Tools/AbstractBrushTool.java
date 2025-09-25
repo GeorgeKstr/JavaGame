@@ -1,5 +1,7 @@
 package com.example.game.World.Editor.Tools;
 
+import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.Input;
 import com.badlogic.gdx.graphics.Camera;
 import com.badlogic.gdx.scenes.scene2d.Actor;
 import com.badlogic.gdx.scenes.scene2d.ui.*;
@@ -12,6 +14,8 @@ public abstract class AbstractBrushTool implements Tool {
   protected final BrushSettings brush;
     private final TerrainSystem terrain;
   private BrushOverlay overlay;
+  private Label rLbl;
+  private Slider r;
 
   protected AbstractBrushTool(BrushSettings sharedBrush, TerrainSystem terrain) { 
     this.brush = sharedBrush; 
@@ -20,17 +24,17 @@ public abstract class AbstractBrushTool implements Tool {
 
   /** Common brush UI (radius/strength/falloff). Call from buildUI() in subclasses. */
   protected void addBrushUI(Table parent, Skin skin) {
-    parent.add(new Label("Brush", skin, "title")).left().row();
+    parent.add(new Label("Brush settings:", skin, "title")).left().row();
 
     // --- Radius ---
     Table t = new Table();
-    final Label rLbl = new Label(String.format("Radius: %.1f", brush.radius), skin);
-    final Slider r = new Slider(1f, 64f, 0.5f, false, skin);
-    r.setValue(brush.radius);
+    rLbl = new Label(String.format("Radius: %.1f", brush.getRadius()), skin);
+    r = new Slider(1f, 64f, 0.5f, false, skin);
+    r.setValue(brush.getRadius());
     r.addListener(new ChangeListener() {
       @Override public void changed(ChangeEvent event, Actor actor) {
-        brush.radius = r.getValue();
-        rLbl.setText(String.format("Radius: %.1f", brush.radius));
+        brush.setRadius(r.getValue());
+        rLbl.setText(String.format("Radius: %.1f", brush.getRadius()));
       }
     });
     t.add(rLbl).left().row();
@@ -39,13 +43,13 @@ public abstract class AbstractBrushTool implements Tool {
 
     // --- Strength ---
     t = new Table();
-    final Label sLbl = new Label(String.format("Strength: %.2f", brush.strength), skin);
+    final Label sLbl = new Label(String.format("Strength: %.2f", brush.getStrength()), skin);
     final Slider s = new Slider(0.01f, 1f, 0.01f, false, skin);
-    s.setValue(brush.strength);
+    s.setValue(brush.getStrength());
     s.addListener(new ChangeListener() {
       @Override public void changed(ChangeEvent event, Actor actor) {
-        brush.strength = s.getValue();
-        sLbl.setText(String.format("Strength: %.2f", brush.strength));
+        brush.setStrength(s.getValue());
+        sLbl.setText(String.format("Strength: %.2f", brush.getStrength()));
       }
     });
     t.add(sLbl).left().row();
@@ -54,19 +58,31 @@ public abstract class AbstractBrushTool implements Tool {
 
     // --- Falloff ---
     t = new Table();
-    final Label fLbl = new Label(String.format("Falloff: %.2f", brush.falloff), skin);
+    final Label fLbl = new Label(String.format("Falloff: %.2f", brush.getFalloff()), skin);
     final Slider f = new Slider(0f, 1f, 0.01f, false, skin);
-    f.setValue(brush.falloff);
+    f.setValue(brush.getFalloff());
     f.addListener(new ChangeListener() {
       @Override public void changed(ChangeEvent event, Actor actor) {
-        brush.falloff = f.getValue();
-        fLbl.setText(String.format("Falloff: %.2f", brush.falloff));
+        brush.setFalloff(f.getValue());
+        fLbl.setText(String.format("Falloff: %.2f", brush.getFalloff()));
       }
     });
     t.add(fLbl).left().row();
     t.add(f).width(220).row();
     parent.add(t).left().padBottom(8).row();
   }
+
+  @Override public boolean scrolled(float amountX, float amountY) {
+    if (Gdx.input.isKeyPressed(Input.Keys.CONTROL_LEFT) && overlay != null) {
+        if(amountY < 0) brush.setRadius(Math.min(800f, brush.getRadius() + 1));
+        else brush.setRadius(Math.max(1f, brush.getRadius() - 1));
+        overlay.setRadius(brush.getRadius());
+        if (rLbl != null) rLbl.setText(String.format("Radius: %.1f", brush.getRadius()));
+        if (r != null) r.setValue(brush.getRadius());
+        return true;
+    }
+    return false;
+}
 
   @Override public void onSelected() {
     if (overlay == null) overlay = new BrushOverlay(64);
@@ -77,7 +93,7 @@ public abstract class AbstractBrushTool implements Tool {
   }
 
   @Override public void update(float dt, Camera cam) { 
-    int radiusTiles = Math.max(1, Math.round(brush.radius / terrain.getTileSize()));
+    int radiusTiles = Math.max(1, Math.round(brush.getRadius() / terrain.getTileSize()));
     if (overlay != null) overlay.update(cam, terrain, radiusTiles, terrain.getTileSize());
   }
 

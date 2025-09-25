@@ -70,6 +70,8 @@ private void rebuildToolUI(Table parent, Skin skin) {
     if (active != null) active.onPointerUp(world, button, sh, ctrl);
   }
 
+  public Tool getActiveTool() { return active; }
+
   @Override public void update(float dt) { if (active != null) active.update(dt, EditorContext.getCamera()); }
   @Override public void render3D(Camera cam) {
     if (active != null) active.render3D(cam);

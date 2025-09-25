@@ -1,5 +1,7 @@
 package com.example.game.World.Editor.Layers;
 
+import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.Input;
 import com.badlogic.gdx.scenes.scene2d.ui.Skin;
 import com.example.game.World.TerrainSystem;
 import com.example.game.World.Editor.BaseToolLayer;
