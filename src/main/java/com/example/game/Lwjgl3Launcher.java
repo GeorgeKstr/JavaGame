@@ -12,6 +12,11 @@ public class Lwjgl3Launcher {
     cfg.setWindowedMode(1280, 720);
     cfg.useVsync(false);
     cfg.setOpenGLEmulation(Lwjgl3ApplicationConfiguration.GLEmulation.GL30, 3, 2);
+    cfg.setBackBufferConfig(
+    8, 8, 8, 8,   // RGBA
+    24,           // depth bits (request 24)
+    8,            // stencil bits (optional)
+    4);             // MSAA samples (optional)
     // Start your GameApp (the Screen manager)
     new Lwjgl3Application(new GameApp(), cfg);
   }

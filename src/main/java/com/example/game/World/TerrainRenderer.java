@@ -16,7 +16,21 @@ final class TerrainRenderer {
 
   void render(SimpleShader shader, Camera cam) {
     shader.bind();
-    shader.setProjectionView(cam.combined);
+
+    // Build view with zero translation (don't mutate cam.view directly)
+    com.badlogic.gdx.math.Matrix4 viewNoTrans = new com.badlogic.gdx.math.Matrix4(cam.view);
+    viewNoTrans.setTranslation(0f, 0f, 0f);
+
+    // proj * view(no translation)
+    com.badlogic.gdx.math.Matrix4 projViewNoTrans =
+        new com.badlogic.gdx.math.Matrix4(cam.projection).mul(viewNoTrans);
+
+    // Feed the shader:
+    // - u_projViewTrans  -> proj * view(no translation)
+    // - u_cameraWorld    -> camera.position (world space)
+    shader.setProjectionView(projViewNoTrans);                 // writes u_projViewTrans
+    shader.getProgram().setUniformf("u_cameraWorld", cam.position);
+
     shader.applyUniforms();
 
     if (w.groundTA != null) {
@@ -37,6 +51,7 @@ final class TerrainRenderer {
       c.renderLodSkirt(shader, sel);
     }
   }
+
 
   void dispose() { /* nothing yet; textures disposed in TerrainWorld */ }
 }
