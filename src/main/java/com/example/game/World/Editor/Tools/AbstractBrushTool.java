@@ -94,7 +94,7 @@ public abstract class AbstractBrushTool implements Tool {
 
   @Override public void update(float dt, Camera cam) { 
     int radiusTiles = Math.max(1, Math.round(brush.getRadius() / terrain.getTileSize()));
-    if (overlay != null) overlay.update(cam, terrain, radiusTiles, terrain.getTileSize());
+    if (overlay != null) overlay.update(cam, terrain, radiusTiles, brush.getFalloff(), terrain.getTileSize());
   }
 
   @Override public void render3D(Camera cam) { if (overlay != null) overlay.draw(cam);}

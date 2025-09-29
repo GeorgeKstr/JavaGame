@@ -80,6 +80,11 @@ public class TerrainSystem implements HeightSampler {
     return editor.paintTexCircle(gx, gz, radius, texId);
   }
 
+  /** Paint with strength (0..1) and falloff (0..1, 1=soft). */
+  public boolean paintTexCircle(int gx, int gz, int radius, byte texId, float strength, float falloff) {
+    return editor.paintTexCircle(gx, gz, radius, texId, strength, falloff);
+  }
+
   /** Rebuild meshes/LODs for any chunks that were marked dirty after edits. */
   public void rebuildDirtyChunks() { editor.rebuildDirtyChunks(); }
 

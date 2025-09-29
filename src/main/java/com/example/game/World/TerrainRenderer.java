@@ -45,6 +45,12 @@ final class TerrainRenderer {
     float camX = cam.position.x, camZ = cam.position.z;
     for (IntMap.Entry<TerrainChunk> e : w.chunks) {
       TerrainChunk c = e.value;
+      // If painting changed CPU arrays, ensure LOD meshes are rebuilt before rendering
+      if (c.isDirty()) {
+        c.buildLods(w.MAX_LOD);
+        c.setDirty(false);
+        w.defaultFlatChunks.remove(e.key);
+      }
       if (!c.hasLods(w.MAX_LOD)) c.buildLods(w.MAX_LOD);
       int sel = lod.selectLod(camX, camZ, c);
       c.renderLod(shader, sel);

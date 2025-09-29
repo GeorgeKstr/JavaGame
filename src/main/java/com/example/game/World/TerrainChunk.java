@@ -9,7 +9,8 @@ import java.util.Arrays;
 
 /**
  * TerrainChunk with multi-LOD support + skirts.
- * Vertex layout: a_position(3), a_normal(3), a_texCoord0(2), a_texId(1) => 9 floats/vertex
+ * Vertex layout (updated for blending):
+ *   a_position(3), a_normal(3), a_texCoord0(2), a_texIds(3), a_texW(3) => 14 floats/vertex
  */
 public class TerrainChunk {
 
@@ -22,7 +23,13 @@ public class TerrainChunk {
 
   // --- data ---
   private short[] heights;        // length = S*S
-  private byte[] texIds;          // length = S*S (0=default)
+  private byte[] texIds;          // length = S*S (top layer id)
+  // Additional layers + weights (0..255). Sum of weights per sample will be kept ~255.
+  private byte[] texId1;          // second layer id per sample
+  private byte[] texId2;          // third layer id per sample
+  private byte[] texW0;           // weight of top layer
+  private byte[] texW1;           // weight of second layer
+  private byte[] texW2;           // weight of third layer
 
   // Full-res mesh (kept for tools); LOD meshes for runtime
   private Mesh mesh;              // full-res (optional)
@@ -37,6 +44,14 @@ public class TerrainChunk {
     this.S = S; this.tile = tile; this.yScale = yScale; this.originX = originX; this.originZ = originZ;
     this.heights = new short[S * S];
     this.texIds = (texIds != null) ? Arrays.copyOf(texIds, S * S) : new byte[S * S];
+    // Initialize blending arrays: default single-layer (w0=255, others 0)
+    this.texId1 = new byte[S * S];
+    this.texId2 = new byte[S * S];
+    this.texW0  = new byte[S * S];
+    this.texW1  = new byte[S * S];
+    this.texW2  = new byte[S * S];
+    Arrays.fill(this.texW0, (byte)255);
+    // texW1/texW2 already zero; texId1/2 default zero
   }
 
   public TerrainChunk(int S, float tile, float yScale, float originX, float originZ, short[] heights, byte[] texIds) {
@@ -47,6 +62,9 @@ public class TerrainChunk {
   public TerrainChunk(int s2, float tILE2, float ySCALE2) {
     this.S = s2; this.tile = tILE2; this.yScale = ySCALE2; this.originX = 0; this.originZ = 0;
     this.heights = new short[S * S]; this.texIds = new byte[S * S];
+    this.texId1 = new byte[S * S]; this.texId2 = new byte[S * S];
+    this.texW0 = new byte[S * S]; this.texW1 = new byte[S * S]; this.texW2 = new byte[S * S];
+    Arrays.fill(this.texW0, (byte)255);
   }
 
   // ---- CPU-side setters ----
@@ -59,6 +77,7 @@ public class TerrainChunk {
   public void setTexIds(byte[] ids) {
     if (ids.length != S * S) throw new IllegalArgumentException("texIds length mismatch");
     this.texIds = Arrays.copyOf(ids, ids.length);
+    // When replacing base ids wholesale, keep existing weights and secondary ids as-is.
     this.dirty = true;
   }
 
@@ -75,7 +94,7 @@ public class TerrainChunk {
   public MeshArrays buildMeshArrays() {
     final int V = S * S;
     final int Q = (S - 1) * (S - 1);
-    final int STRIDE = 9;
+    final int STRIDE = 14;
 
     float[] verts = new float[V * STRIDE];
     short[] idx   = new short[Q * 6];
@@ -90,7 +109,15 @@ public class TerrainChunk {
         verts[v++] = px; verts[v++] = py; verts[v++] = pz;
         verts[v++] = 0f; verts[v++] = 1f; verts[v++] = 0f;
         verts[v++] = x;  verts[v++] = z;
-        verts[v++] = (float)(texIds[z * S + x] & 0xFF);
+        int idxS = z * S + x;
+        // ids (as floats)
+        verts[v++] = (float)(texIds[idxS] & 0xFF);
+        verts[v++] = (float)(texId1[idxS] & 0xFF);
+        verts[v++] = (float)(texId2[idxS] & 0xFF);
+        // weights normalized 0..1
+        verts[v++] = (float)(texW0[idxS] & 0xFF) / 255f;
+        verts[v++] = (float)(texW1[idxS] & 0xFF) / 255f;
+        verts[v++] = (float)(texW2[idxS] & 0xFF) / 255f;
       }
     }
 
@@ -130,11 +157,12 @@ public class TerrainChunk {
   }
 
   private Mesh createMesh(float[] verts, short[] indices) {
-    Mesh m = new Mesh(true, verts.length / 9, indices.length,
+    Mesh m = new Mesh(true, verts.length / 14, indices.length,
         new VertexAttribute(Usage.Position, 3, "a_position"),
         new VertexAttribute(Usage.Normal,   3, "a_normal"),
         new VertexAttribute(Usage.TextureCoordinates, 2, "a_texCoord0"),
-        new VertexAttribute(Usage.Generic, 1, "a_texId"));
+        new VertexAttribute(Usage.Generic, 3, "a_texIds"),
+        new VertexAttribute(Usage.Generic, 3, "a_texW"));
     m.setVertices(verts);
     m.setIndices(indices);
     return m;
@@ -168,7 +196,7 @@ public class TerrainChunk {
   /** CPU-only downsampled mesh arrays for step (1,2,4,...) */
   public MeshArrays buildMeshArraysForStep(int step) {
     final int S2 = ((S - 1) / step) + 1;   // reduced samples per side
-    final int STRIDE = 9;
+    final int STRIDE = 14;
     final int V = S2 * S2;
     final int Q = (S2 - 1) * (S2 - 1);
 
@@ -187,7 +215,13 @@ public class TerrainChunk {
         verts[v++] = px; verts[v++] = py; verts[v++] = pz;
         verts[v++] = 0f; verts[v++] = 1f; verts[v++] = 0f;
         verts[v++] = x;  verts[v++] = z;
-        verts[v++] = (float)(texIds[z * S + x] & 0xFF);
+        int idxS = z * S + x;
+        verts[v++] = (float)(texIds[idxS] & 0xFF);
+        verts[v++] = (float)(texId1[idxS] & 0xFF);
+        verts[v++] = (float)(texId2[idxS] & 0xFF);
+        verts[v++] = (float)(texW0[idxS] & 0xFF) / 255f;
+        verts[v++] = (float)(texW1[idxS] & 0xFF) / 255f;
+        verts[v++] = (float)(texW2[idxS] & 0xFF) / 255f;
       }
     }
 
@@ -214,7 +248,7 @@ public class TerrainChunk {
   /** Build a perimeter skirt (top + lowered ring), hiding cracks between LODs. */
   private MeshArrays buildSkirtArraysForStep(int step, float skirtDepth) {
     final int S2 = ((S - 1) / step) + 1;
-    final int STRIDE = 9;
+    final int STRIDE = 14;
     final int RING = S2 * 4;         // top ring vertices
     final int V = RING * 2;          // top + bottom
     final int SEG_PER_EDGE = S2 - 1;
@@ -260,17 +294,22 @@ public class TerrainChunk {
   }
 
   private int emitSkirtVertex(float[] verts, int v, int x, int z, float yOffset) {
-    final int STRIDE = 9;
+    final int STRIDE = 14;
     float px = originX + x * tile;
     float py = heights[z * S + x] * yScale + yOffset;
     float pz = originZ + z * tile;
-    byte tid = texIds[z * S + x];
 
     verts[v++] = px; verts[v++] = py; verts[v++] = pz;
     // simple outward-ish normal; 0,1,0 is fine for most lighting since skirt is thin
     verts[v++] = 0f; verts[v++] = 1f; verts[v++] = 0f;
     verts[v++] = x;  verts[v++] = z;
-    verts[v++] = (float)(tid & 0xFF);
+    int idxS = z * S + x;
+    verts[v++] = (float)(texIds[idxS] & 0xFF);
+    verts[v++] = (float)(texId1[idxS] & 0xFF);
+    verts[v++] = (float)(texId2[idxS] & 0xFF);
+    verts[v++] = (float)(texW0[idxS] & 0xFF) / 255f;
+    verts[v++] = (float)(texW1[idxS] & 0xFF) / 255f;
+    verts[v++] = (float)(texW2[idxS] & 0xFF) / 255f;
     return v;
   }
 
@@ -346,6 +385,11 @@ public class TerrainChunk {
 
   public short[] getHeightsArray() { return heights; }
   public byte[]  getTexIdsArray()  { return texIds; }
+  public byte[]  getTexId1Array()  { return texId1; }
+  public byte[]  getTexId2Array()  { return texId2; }
+  public byte[]  getTexW0Array()   { return texW0; }
+  public byte[]  getTexW1Array()   { return texW1; }
+  public byte[]  getTexW2Array()   { return texW2; }
 
   public boolean isDirty() { return dirty; }
   public void setDirty(boolean dirty) { this.dirty = dirty; }

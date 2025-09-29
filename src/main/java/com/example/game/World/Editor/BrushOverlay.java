@@ -22,6 +22,7 @@ public final class BrushOverlay {
 
   private final int segments;
   private final float[] rx, ry, rz;   // ring vertices
+  private final float[] frx, fry, frz; // falloff ring vertices
   private final Vector3 center = new Vector3();
   private boolean hasHit = false;
   private float radiusWorld = 1f;
@@ -31,10 +32,13 @@ public final class BrushOverlay {
     this.rx = new float[this.segments];
     this.ry = new float[this.segments];
     this.rz = new float[this.segments];
+    this.frx = new float[this.segments];
+    this.fry = new float[this.segments];
+    this.frz = new float[this.segments];
   }
 
   /** Update from mouse → world; brushRadiusTiles is in *cells*, tileSize in *meters*. */
-  public void update(Camera cam, HeightSampler sampler, int brushRadiusTiles, float tileSize) {
+  public void update(Camera cam, HeightSampler sampler, int brushRadiusTiles, float brushFalloff, float tileSize) {
     // Get a pick ray in window coords (libGDX handles viewport + Y orientation)
     int sx = Gdx.input.getX();
     int sy = Gdx.input.getY();
@@ -57,6 +61,18 @@ public final class BrushOverlay {
       if (Float.isNaN(y)) y = center.y; // guard against unloaded cells
       rx[i] = x; ry[i] = y + 0.02f; rz[i] = z;
     }
+
+    float radiusFallOff = radiusWorld * brushFalloff;
+    //System.out.println("radiusFallOff: " + radiusFallOff);
+    for (int i = 0; i < segments; i++) {
+      float a = (float)(i * Math.PI * 2.0 / segments);
+      float x = center.x + radiusFallOff * (float)Math.cos(a);
+      float z = center.z + radiusFallOff * (float)Math.sin(a);
+      float y = sampler.heightAt(x, z, center.y);
+      if (Float.isNaN(y)) y = center.y; // guard against unloaded cells
+      frx[i] = x; fry[i] = y + 0.02f; frz[i] = z;
+    }
+
   }
 
   /** Draw the ring on top of the world. Call after your terrain/sky pipeline, before UI. */
@@ -84,6 +100,11 @@ public final class BrushOverlay {
     for (int i = 0; i < segments; i++) {
       int j = (i + 1) % segments;
       sr.line(rx[i], ry[i], rz[i], rx[j], ry[j], rz[j]);
+    }
+    sr.setColor(1f, 1f, 0.2f, 0.95f);
+    for (int i = 0; i < segments; i++) {
+      int j = (i + 1) % segments;
+      sr.line(frx[i], fry[i], frz[i], frx[j], fry[j], frz[j]);
     }
     sr.end();
 
