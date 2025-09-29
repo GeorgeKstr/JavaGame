@@ -5,10 +5,14 @@ import com.badlogic.gdx.utils.IntMap;
 /**
  * TerrainEditor — smooth brush + soft blending (drop-in replacement)
  *
- * Changes vs your version:
- *  - quintic falloff + 2x2 supersampling to anti-alias brush edge
- *  - convex weight blending (no aggressive REL_CUT during stroke)
- *  - gentle dust cut only; optional cleanup stays outside stroke
+ * Fixes / Changes:
+ *  - Border/bias fix: precise primaryIndex mapping so shared edges map to the current chunk's S-1 vertex.
+ *  - Texture brush is now a "minimum threshold" raise-only mixer:
+ *      * ensures target layer >= threshold (falloff-shaped * strength)
+ *      * never reduces any layer that's already higher than the target threshold
+ *      * trims only the non-target layers (proportionally) if total would exceed 1
+ *      * gentle "dust" cut still applies, but never below the target threshold
+ *  - Supersampling and falloff logic from your version kept as-is.
  */
 final class TerrainEditor {
   private final TerrainWorld w;
@@ -18,13 +22,30 @@ final class TerrainEditor {
   private static class Index { int cx, cz, lx, lz; void set(int cx,int cz,int lx,int lz){this.cx=cx;this.cz=cz;this.lx=lx;this.lz=lz;} }
   private int cells() { return w.S - 1; }
 
+  /**
+   * Primary index mapping with exact gridline handling.
+   * Maps shared edges to the "previous" chunk's S-1 local vertex so neighbor propagation works
+   * and brush location is not biased at chunk borders. Works for negative world coords, too.
+   */
   private boolean primaryIndex(int gx, int gz, Index out) {
-    int cpc = cells();
-    int cx = (int)Math.floor((float)gx / cpc), cz = (int)Math.floor((float)gz / cpc);
-    int lx = gx - cx * cpc, lz = gz - cz * cpc;
-    if (lx < 0 || lz < 0 || lx >= w.S || lz >= w.S) return false;
-    out.set(cx, cz, lx, lz); return true;
+    final int S = w.S;
+    final int cpc = S - 1; // cells per chunk (local indices 0..S-1)
+
+    int cx = Math.floorDiv(gx, cpc);
+    int cz = Math.floorDiv(gz, cpc);
+    int lx = gx - cx * cpc; // remainder in [0..cpc]
+    int lz = gz - cz * cpc;
+
+    // If we're exactly on an internal grid line, assign to the previous chunk's S-1.
+    // Avoids shifting the effective brush center at borders.
+    if (lx == 0 && gx != 0) { cx -= 1; lx = cpc; }
+    if (lz == 0 && gz != 0) { cz -= 1; lz = cpc; }
+
+    if (lx < 0 || lz < 0 || lx >= S || lz >= S) return false;
+    out.set(cx, cz, lx, lz);
+    return true;
   }
+
   private int neighborsForSample(Index p, Index[] o) {
     int S = w.S; int c=0;
     if (p.lx==S-1) o[c++].set(p.cx+1,p.cz,0,p.lz);
@@ -118,8 +139,13 @@ final class TerrainEditor {
     return changed;
   }
 
-  /** Blend paint into a single cell with soft convex mixing across up to 3 layers. */
+  /**
+   * Raise-Only (Minimum Threshold) blending for a single cell.
+   * Ensures the target layer's weight >= f (threshold).
+   * Never pulls down any layer that's already > its previous value; trims only non-target layers if sum>1.
+   */
   private boolean applyPaintToCell(TerrainChunk c, int idx, byte newId, float f) {
+    f = clamp01(f);
     if (f <= 0f) return false;
 
     // read current
@@ -138,56 +164,151 @@ final class TerrainEditor {
     float w2 = (w2Arr[idx] & 0xFF) / 255f;
 
     final float EPS_EMPTY = 0.02f; // small so new layers can appear smoothly
+    final float CUT = 0.01f;
     final int newI = (newId & 0xFF);
 
-    // Choose target slot
+    // Choose / prepare target slot
     int slot = -1;
     if (id0 == newI) slot = 0;
     else if (id1 == newI) slot = 1;
     else if (id2 == newI) slot = 2;
-    else if (w0 < EPS_EMPTY) { id0 = newI; slot = 0; }
-    else if (w1 < EPS_EMPTY) { id1 = newI; slot = 1; }
-    else if (w2 < EPS_EMPTY) { id2 = newI; slot = 2; }
+    else if (w0 < EPS_EMPTY) { id0 = newI; w0 = 0f; slot = 0; }
+    else if (w1 < EPS_EMPTY) { id1 = newI; w1 = 0f; slot = 1; }
+    else if (w2 < EPS_EMPTY) { id2 = newI; w2 = 0f; slot = 2; }
     else {
       // replace smallest weight (stable & soft)
-      if (w0 <= w1 && w0 <= w2) { id0 = newI; slot = 0; }
-      else if (w1 <= w0 && w1 <= w2) { id1 = newI; slot = 1; }
-      else { id2 = newI; slot = 2; }
+      if (w0 <= w1 && w0 <= w2) { id0 = newI; w0 = 0f; slot = 0; }
+      else if (w1 <= w0 && w1 <= w2) { id1 = newI; w1 = 0f; slot = 1; }
+      else { id2 = newI; w2 = 0f; slot = 2; }
     }
     if (slot < 0) return false;
 
-    // Convex blend towards the target slot
-    float k = 1f - clamp01(f);
-    w0 *= k; w1 *= k; w2 *= k;
-    if (slot == 0) w0 += f; else if (slot == 1) w1 += f; else w2 += f;
+    float oldW = (slot==0? w0 : slot==1? w1 : w2);
+    float target = Math.max(oldW, f);
+    float delta  = target - oldW;
+    if (delta <= 1e-6f) {
+      // Nothing to raise; still allow bubble/sorting & gentle cut to keep arrays tidy, but skip trims.
+      // We'll just rewrite bytes (may early-return false to skip dirty if you prefer).
+      return false;
+    }
+
+    // Sum before the raise
+    float sum = w0 + w1 + w2;
+    float newSum = sum + delta;
+
+    // If we overflow 1, trim only non-target layers proportionally.
+    if (newSum > 1f + 1e-6f) {
+      float over = newSum - 1f;
+      float o0 = (slot==0)? 0f : w0;
+      float o1 = (slot==1)? 0f : w1;
+      float o2 = (slot==2)? 0f : w2;
+      float otherSum = o0 + o1 + o2;
+
+      if (otherSum > 1e-8f) {
+        float scale = Math.max(0f, 1f - (over / otherSum));
+        if (slot != 0) w0 *= scale;
+        if (slot != 1) w1 *= scale;
+        if (slot != 2) w2 *= scale;
+      } else {
+        // No room elsewhere; the target simply clamps to 1 and others to 0
+        if (slot != 0) w0 = 0f;
+        if (slot != 1) w1 = 0f;
+        if (slot != 2) w2 = 0f;
+        target = 1f;
+      }
+    }
+
+    // Apply the raise to the target slot
+    if (slot == 0) w0 = target;
+    else if (slot == 1) w1 = target;
+    else w2 = target;
+
+    // Normalize to sum==1 after trimming stage (keeps shader expectations),
+    // but do NOT push the target above 'target' nor pull anything else extra.
+    float sNorm = w0 + w1 + w2;
+    if (sNorm > 1e-6f) {
+      w0 /= sNorm; w1 /= sNorm; w2 /= sNorm;
+      // Ensure target is still >= f after normalization due to numeric error
+      float wT = (slot==0? w0 : slot==1? w1 : w2);
+      if (wT < f) {
+        float addBack = f - wT;
+        if (slot == 0) w0 += addBack;
+        else if (slot == 1) w1 += addBack;
+        else w2 += addBack;
+        // Re-normalize if we overflew 1 (very rare)
+        float s2 = w0 + w1 + w2;
+        if (s2 > 1f + 1e-6f) {
+          float over = s2 - 1f;
+          float o0 = (slot==0)? 0f : w0;
+          float o1 = (slot==1)? 0f : w1;
+          float o2 = (slot==2)? 0f : w2;
+          float oSum = o0 + o1 + o2;
+          if (oSum > 1e-8f) {
+            float scale = Math.max(0f, 1f - (over / oSum));
+            if (slot != 0) w0 *= scale;
+            if (slot != 1) w1 *= scale;
+            if (slot != 2) w2 *= scale;
+          }
+        }
+      }
+    } else {
+      // Degenerate case
+      if (slot == 0) { w0 = 1f; w1 = 0f; w2 = 0f; }
+      else if (slot == 1) { w0 = 0f; w1 = 1f; w2 = 0f; }
+      else { w0 = 0f; w1 = 0f; w2 = 1f; }
+    }
 
     // Bubble-up by weight so that layer 0 is the dominant/top layer
-    if (w1 > w0) { float tw=w0; w0=w1; w1=tw; int ti=id0; id0=id1; id1=ti; }
-    if (w2 > w1) { float tw=w1; w1=w2; w2=tw; int ti=id1; id1=id2; id2=ti; }
-    if (w1 > w0) { float tw=w0; w0=w1; w1=tw; int ti=id0; id0=id1; id1=ti; }
+    if (w1 > w0) { float tw=w0; w0=w1; w1=tw; int ti=id0; id0=id1; id1=ti; if (slot==0) slot=1; else if (slot==1) slot=0; }
+    if (w2 > w1) { float tw=w1; w1=w2; w2=tw; int ti=id1; id1=id2; id2=ti; if (slot==1) slot=2; else if (slot==2) slot=1; }
+    if (w1 > w0) { float tw=w0; w0=w1; w1=tw; int ti=id0; id0=id1; id1=ti; if (slot==0) slot=1; else if (slot==1) slot=0; }
 
-    // Normalize to sum==1 (or reasonable default)
-    float sum = w0 + w1 + w2;
-    if (sum > 1e-6f) { w0/=sum; w1/=sum; w2/=sum; }
-    else { w0 = 1f; w1 = 0f; w2 = 0f; }
+    // Gentle dust cut for non-target layers; never let target fall below f
+    float tWeight = (slot==0? w0 : slot==1? w1 : w2);
+    if (slot != 0 && w0 < CUT) w0 = 0f;
+    if (slot != 1 && w1 < CUT) w1 = 0f;
+    if (slot != 2 && w2 < CUT) w2 = 0f;
+    // Re-assert target minimum after cuts
+    if (slot == 0) w0 = Math.max(w0, f);
+    else if (slot == 1) w1 = Math.max(w1, f);
+    else w2 = Math.max(w2, f);
 
-    // Gentle dust cut only to avoid outline halos (no REL_CUT during stroke)
-    final float CUT = 0.01f;
-    if (w0 < CUT) w0 = 0f; if (w1 < CUT) w1 = 0f; if (w2 < CUT) w2 = 0f;
+    // If we now exceed 1 due to re-asserting f, trim non-targets again (rare, tiny deltas)
+    float sFinal = w0 + w1 + w2;
+    if (sFinal > 1f + 1e-6f) {
+      float over = sFinal - 1f;
+      float o0 = (slot==0)? 0f : w0;
+      float o1 = (slot==1)? 0f : w1;
+      float o2 = (slot==2)? 0f : w2;
+      float oSum = o0 + o1 + o2;
+      if (oSum > 1e-8f) {
+        float scale = Math.max(0f, 1f - (over / oSum));
+        if (slot != 0) w0 *= scale;
+        if (slot != 1) w1 *= scale;
+        if (slot != 2) w2 *= scale;
+      } else {
+        if (slot != 0) w0 = 0f;
+        if (slot != 1) w1 = 0f;
+        if (slot != 2) w2 = 0f;
+        if (slot == 0) w0 = 1f;
+        else if (slot == 1) w1 = 1f;
+        else w2 = 1f;
+      }
+    }
 
-    // Re-normalize if needed
-    sum = w0 + w1 + w2;
-    if (sum > 1e-6f) {
-      if (sum > 1f) { w0/=sum; w1/=sum; w2/=sum; }
-    } else { w0 = 1f; w1 = 0f; w2 = 0f; }
-
-    // write back (apply deadzone at byte level to match CUT)
+    // write back (apply byte-level deadzone to non-targets; target is clamped normally)
     id0Arr[idx] = (byte)id0; id1Arr[idx] = (byte)id1; id2Arr[idx] = (byte)id2;
     int cutByte = (int)Math.ceil(CUT * 255f);
+
     int b0 = Math.round(clamp01(w0) * 255f);
     int b1 = Math.round(clamp01(w1) * 255f);
     int b2 = Math.round(clamp01(w2) * 255f);
-    if (b0 <= cutByte) b0 = 0; if (b1 <= cutByte) b1 = 0; if (b2 <= cutByte) b2 = 0;
+
+    // Only zero-out non-targets with dust cut at byte level
+    if (slot != 0 && b0 <= cutByte) b0 = 0;
+    if (slot != 1 && b1 <= cutByte) b1 = 0;
+    if (slot != 2 && b2 <= cutByte) b2 = 0;
+
     w0Arr[idx] = (byte)b0;
     w1Arr[idx] = (byte)b1;
     w2Arr[idx] = (byte)b2;
