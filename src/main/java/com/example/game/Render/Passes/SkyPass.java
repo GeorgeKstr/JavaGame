@@ -1,11 +1,10 @@
 package com.example.game.Render.Passes;
 
-import com.badlogic.gdx.utils.Disposable;
 import com.example.game.Render.SkyRenderer;
 import com.example.game.Render.Pipeline.RenderContext;
 import com.example.game.Render.Pipeline.RenderPass;
 
-public final class SkyPass implements RenderPass, Disposable {
+public final class SkyPass implements RenderPass {
   private final SkyRenderer sky = new SkyRenderer();
 
   public void init() { sky.init(); }

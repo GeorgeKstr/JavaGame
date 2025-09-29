@@ -3,7 +3,6 @@ package com.example.game.World.Editor.Tools;
 import com.badlogic.gdx.scenes.scene2d.ui.*;
 import com.badlogic.gdx.math.Vector3;
 import com.example.game.World.TerrainSystem;
-import com.example.game.World.Editor.Tools.Tool;
 
 public final class WalkTool implements Tool {
   private final TerrainSystem terrain;

@@ -1,7 +1,6 @@
 package com.example.game.Render.Passes;
 
 import com.badlogic.gdx.Gdx;
-import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.math.MathUtils;
 import com.example.game.Render.GodRaysRenderer;
 import com.example.game.Render.Pipeline.RenderContext;
