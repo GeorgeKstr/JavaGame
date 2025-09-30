@@ -83,8 +83,23 @@ final class TerrainWorld {
     pool.shutdownNow();
   }
 
-  static final class Result {
-    final int k; final float ox, oz; final short[] h; final byte[] t; final boolean defaultFlat; final Throwable err;
-    Result(int k, float ox, float oz, short[] h, byte[] t, boolean df, Throwable e) { this.k=k; this.ox=ox; this.oz=oz; this.h=h; this.t=t; this.defaultFlat=df; this.err=e; }
+  public static final class Result {
+    public final int k; public final float ox, oz;
+    public final short[] h;
+    public final byte[] id0, id1, id2, w0, w1, w2;
+    public final boolean defaultFlat;
+    public final Throwable err;
+
+    public Result(int k, float ox, float oz,
+                  short[] h,
+                  byte[] id0, byte[] id1, byte[] id2,
+                  byte[] w0,  byte[] w1,  byte[] w2,
+                  boolean defaultFlat, Throwable err) {
+      this.k=k; this.ox=ox; this.oz=oz; this.h=h;
+      this.id0=id0; this.id1=id1; this.id2=id2;
+      this.w0=w0;   this.w1=w1;   this.w2=w2;
+      this.defaultFlat=defaultFlat; this.err=err;
+    }
   }
+
 }

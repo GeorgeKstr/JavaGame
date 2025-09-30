@@ -2,7 +2,6 @@ package com.example.game.World;
 
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.utils.IntMap;
-import com.badlogic.gdx.utils.IntSet;
 
 import java.util.Arrays;
 
@@ -67,19 +66,69 @@ final class TerrainStreamer {
     w.pool.submit(() -> {
       try {
         byte[] hmx = w.map.readChunkHmx(cx, cz);
+        final int samples = w.S * w.S;
+
         if (hmx == null) {
+          // ----- default flat chunk -----
           int dt = w.map.getManifest().defaultTexture;
-          short[] h = new short[w.S * w.S];
-          byte[]  t = new byte[w.S * w.S];
-          byte def = (byte)(dt & 0xFF);
-          if (def != 0) Arrays.fill(t, def);
-          w.completed.add(new TerrainWorld.Result(k, ox, oz, h, t, true, null));
-        } else {
-          var lc = w.provider.loadFromBytes(hmx);
-          w.completed.add(new TerrainWorld.Result(k, ox, oz, lc.heights, lc.texIds, false, null));
+          short[] h = new short[samples];
+
+          // default: id0 = defaultTexture, w0 = 255; others 0
+          byte[] id0 = new byte[samples];
+          byte[] id1 = new byte[samples];
+          byte[] id2 = new byte[samples];
+          byte[] w0  = new byte[samples];
+          byte[] w1  = new byte[samples];
+          byte[] w2  = new byte[samples];
+
+          byte defId = (byte)(dt & 0xFF);
+          Arrays.fill(id0, defId);
+          Arrays.fill(w0, (byte)255);
+          // id1/id2/w1/w2 left at 0
+
+          // NOTE: Extend TerrainWorld.Result to accept the six arrays:
+          // new TerrainWorld.Result(int k, float ox, float oz,
+          //   short[] h, byte[] id0, byte[] id1, byte[] id2, byte[] w0, byte[] w1, byte[] w2,
+          //   boolean defaultFlat, Throwable err)
+          w.completed.add(new TerrainWorld.Result(k, ox, oz, h, id0, id1, id2, w0, w1, w2, true, null));
+          return;
         }
+
+        // ----- load from HMXS -----
+        var lc = w.provider.loadFromBytes(hmx);
+
+        // If your provider is the v2 one I gave you, it returns the six arrays already.
+        // If you still have legacy texIds[], up-convert here.
+        byte[] id0, id1, id2, w0, w1, w2;
+        short[] h = lc.heights;
+
+        if (lc instanceof SparseChunkProvider.LoadedChunk) {
+          // Using the v2 LoadedChunk with six arrays
+          id0 = ((SparseChunkProvider.LoadedChunk) lc).id0;
+          id1 = ((SparseChunkProvider.LoadedChunk) lc).id1;
+          id2 = ((SparseChunkProvider.LoadedChunk) lc).id2;
+          w0  = ((SparseChunkProvider.LoadedChunk) lc).w0;
+          w1  = ((SparseChunkProvider.LoadedChunk) lc).w1;
+          w2  = ((SparseChunkProvider.LoadedChunk) lc).w2;
+        } else {
+          // Fallback: legacy `texIds` only → make w0=255, others 0
+          // (If your provider class name differs, adjust this block or remove it.)
+          byte[] texIds = (byte[])TerrainReflection.get(lc, "texIds"); // tiny helper; or just change your provider.
+          id0 = new byte[samples];
+          id1 = new byte[samples];
+          id2 = new byte[samples];
+          w0  = new byte[samples];
+          w1  = new byte[samples];
+          w2  = new byte[samples];
+          System.arraycopy(texIds, 0, id0, 0, samples);
+          Arrays.fill(w0, (byte)255);
+        }
+
+        w.completed.add(new TerrainWorld.Result(k, ox, oz, h, id0, id1, id2, w0, w1, w2, false, null));
+
       } catch (Throwable ex) {
-        w.completed.add(new TerrainWorld.Result(k, ox, oz, null, null, false, ex));
+        // Pass null arrays to signal failure
+        w.completed.add(new TerrainWorld.Result(k, ox, oz, null, null, null, null, null, null, null, false, ex));
       }
     });
   }
@@ -87,14 +136,34 @@ final class TerrainStreamer {
   private void drainCompleted() {
     for (TerrainWorld.Result r; (r = w.completed.poll()) != null; ) {
       w.pending.remove(r.k);
-      if (r.err != null || r.h == null || r.t == null) {
+      if (r.err != null || r.h == null || r.id0 == null || r.w0 == null) {
         Gdx.app.error("TerrainSystem", "Chunk load failed k=" + r.k, r.err);
         continue;
       }
-      var tc = new TerrainChunk(w.S, w.tile, w.yScale, r.ox, r.oz, r.h, r.t);
+
+      // Prefer a constructor that accepts the six arrays.
+      // If your TerrainChunk lacks it, construct with heights-only and then set arrays via setters.
+      TerrainChunk tc = new TerrainChunk(
+          w.S, w.tile, w.yScale, r.ox, r.oz,
+          r.h, r.id0, r.id1, r.id2, r.w0, r.w1, r.w2
+      );
+
       tc.buildLods(w.MAX_LOD);
       w.chunks.put(r.k, tc);
       if (r.defaultFlat) w.defaultFlatChunks.add(r.k); else w.defaultFlatChunks.remove(r.k);
+    }
+  }
+
+  // --- optional tiny helper if you briefly need reflection fallback (remove once all code is v2) ---
+  private static final class TerrainReflection {
+    static Object get(Object o, String field) {
+      try {
+        var f = o.getClass().getDeclaredField(field);
+        f.setAccessible(true);
+        return f.get(o);
+      } catch (Throwable t) {
+        return null;
+      }
     }
   }
 }

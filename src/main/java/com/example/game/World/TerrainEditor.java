@@ -149,7 +149,7 @@ final class TerrainEditor {
     if (f <= 0f) return false;
 
     // read current
-    byte[] id0Arr = c.getTexIdsArray();
+    byte[] id0Arr = c.getTexId0Array();
     byte[] id1Arr = c.getTexId1Array();
     byte[] id2Arr = c.getTexId2Array();
     byte[] w0Arr  = c.getTexW0Array();

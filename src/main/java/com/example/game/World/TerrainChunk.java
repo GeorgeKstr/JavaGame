@@ -40,48 +40,97 @@ public class TerrainChunk {
   private boolean dirty;          // CPU data changed → rebuild LODs
 
   // ---- ctors ----
+
+  /** Legacy: construct with base ids only (single layer). */
   public TerrainChunk(int S, float tile, float yScale, float originX, float originZ, byte[] texIds) {
     this.S = S; this.tile = tile; this.yScale = yScale; this.originX = originX; this.originZ = originZ;
-    this.heights = new short[S * S];
-    this.texIds = (texIds != null) ? Arrays.copyOf(texIds, S * S) : new byte[S * S];
+    int n = S * S;
+    this.heights = new short[n];
+    this.texIds = (texIds != null) ? Arrays.copyOf(texIds, n) : new byte[n];
     // Initialize blending arrays: default single-layer (w0=255, others 0)
-    this.texId1 = new byte[S * S];
-    this.texId2 = new byte[S * S];
-    this.texW0  = new byte[S * S];
-    this.texW1  = new byte[S * S];
-    this.texW2  = new byte[S * S];
+    this.texId1 = new byte[n];
+    this.texId2 = new byte[n];
+    this.texW0  = new byte[n];
+    this.texW1  = new byte[n];
+    this.texW2  = new byte[n];
     Arrays.fill(this.texW0, (byte)255);
-    // texW1/texW2 already zero; texId1/2 default zero
   }
 
+  /** Legacy: construct with heights + base ids (single layer). */
   public TerrainChunk(int S, float tile, float yScale, float originX, float originZ, short[] heights, byte[] texIds) {
     this(S, tile, yScale, originX, originZ, texIds);
     setHeights(heights);
   }
 
+  /** Convenience minimal ctor. */
   public TerrainChunk(int s2, float tILE2, float ySCALE2) {
     this.S = s2; this.tile = tILE2; this.yScale = ySCALE2; this.originX = 0; this.originZ = 0;
-    this.heights = new short[S * S]; this.texIds = new byte[S * S];
-    this.texId1 = new byte[S * S]; this.texId2 = new byte[S * S];
-    this.texW0 = new byte[S * S]; this.texW1 = new byte[S * S]; this.texW2 = new byte[S * S];
+    int n = S * S;
+    this.heights = new short[n]; this.texIds = new byte[n];
+    this.texId1 = new byte[n]; this.texId2 = new byte[n];
+    this.texW0 = new byte[n]; this.texW1 = new byte[n]; this.texW2 = new byte[n];
     Arrays.fill(this.texW0, (byte)255);
+  }
+
+  /** New: construct with heights + full 3 id + 3 weight arrays. */
+  public TerrainChunk(int S, float tile, float yScale, float originX, float originZ,
+                      short[] heights,
+                      byte[] id0, byte[] id1, byte[] id2,
+                      byte[] w0,  byte[] w1,  byte[] w2) {
+    this.S = S; this.tile = tile; this.yScale = yScale; this.originX = originX; this.originZ = originZ;
+    final int n = S * S;
+
+    if (heights == null || heights.length != n)
+      throw new IllegalArgumentException("heights length != S*S");
+
+    // Accept null arrays: allocate sane defaults
+    this.texIds = (id0 != null && id0.length == n) ? id0 : new byte[n];
+    this.texId1 = (id1 != null && id1.length == n) ? id1 : new byte[n];
+    this.texId2 = (id2 != null && id2.length == n) ? id2 : new byte[n];
+    this.texW0  = (w0  != null && w0.length  == n) ? w0  : new byte[n];
+    this.texW1  = (w1  != null && w1.length  == n) ? w1  : new byte[n];
+    this.texW2  = (w2  != null && w2.length  == n) ? w2  : new byte[n];
+
+    this.heights = Arrays.copyOf(heights, n);
+
+    // If all three weights are zero for any sample, fall back to w0=255.
+    for (int i = 0; i < n; i++) ensureWeightsValid(i);
+
+    this.dirty = true;
   }
 
   // ---- CPU-side setters ----
   public void setHeights(short[] h) {
-    if (h.length != S * S) throw new IllegalArgumentException("heights length mismatch");
+    if (h == null || h.length != S * S) throw new IllegalArgumentException("heights length mismatch");
     this.heights = Arrays.copyOf(h, h.length);
     this.dirty = true;
   }
 
   public void setTexIds(byte[] ids) {
-    if (ids.length != S * S) throw new IllegalArgumentException("texIds length mismatch");
+    if (ids == null || ids.length != S * S) throw new IllegalArgumentException("texIds length mismatch");
     this.texIds = Arrays.copyOf(ids, ids.length);
-    // When replacing base ids wholesale, keep existing weights and secondary ids as-is.
     this.dirty = true;
   }
 
+  // New setters for v2 data (used by streamer/editor when not using the new ctor)
+  public void setTexId1Array(byte[] a) { requireLen(a, "texId1"); this.texId1 = a; this.dirty = true; }
+  public void setTexId2Array(byte[] a) { requireLen(a, "texId2"); this.texId2 = a; this.dirty = true; }
+  public void setTexW0Array(byte[] a)  { requireLen(a, "texW0");  this.texW0  = a; this.dirty = true; }
+  public void setTexW1Array(byte[] a)  { requireLen(a, "texW1");  this.texW1  = a; this.dirty = true; }
+  public void setTexW2Array(byte[] a)  { requireLen(a, "texW2");  this.texW2  = a; this.dirty = true; }
+
+  private void requireLen(byte[] a, String name) {
+    if (a == null || a.length != S * S) throw new IllegalArgumentException(name + " length mismatch");
+  }
+
+  /** If all three weights are zero, set w0=255 so the shader has a valid layer. */
+  private void ensureWeightsValid(int i) {
+    int a = texW0[i] & 0xFF, b = texW1[i] & 0xFF, c = texW2[i] & 0xFF;
+    if ((a | b | c) == 0) texW0[i] = (byte)255;
+  }
+
   // ---- Mesh building (full-res) ----
+
   /** Tools: build single full-res mesh (render thread). */
   public void buildMesh() {
     MeshArrays md = buildMeshArrays();
@@ -384,7 +433,7 @@ public class TerrainChunk {
   public float getOriginZ() { return originZ; }
 
   public short[] getHeightsArray() { return heights; }
-  public byte[]  getTexIdsArray()  { return texIds; }
+  public byte[]  getTexId0Array()  { return texIds; }
   public byte[]  getTexId1Array()  { return texId1; }
   public byte[]  getTexId2Array()  { return texId2; }
   public byte[]  getTexW0Array()   { return texW0; }
