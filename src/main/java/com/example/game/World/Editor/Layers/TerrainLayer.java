@@ -7,6 +7,7 @@ import com.example.game.World.Editor.BrushOverlay;
 import com.example.game.World.Editor.Tools.BrushSettings;
 import com.example.game.World.Editor.Tools.Terrain.PaintTextureTool;
 import com.example.game.World.Editor.Tools.Terrain.RaiseLowerTool;
+import com.example.game.World.Editor.Tools.Terrain.PolishSmoothTool;
 
 public final class TerrainLayer extends BaseToolLayer {
   private final TerrainSystem terrain;
@@ -20,6 +21,7 @@ public final class TerrainLayer extends BaseToolLayer {
     // add your tools here, e.g.:
     addTool(new RaiseLowerTool(terrain, brush));
     addTool(new PaintTextureTool(terrain, brush));
+    addTool(new PolishSmoothTool(terrain, brush));
   }
 
  // onActivate()

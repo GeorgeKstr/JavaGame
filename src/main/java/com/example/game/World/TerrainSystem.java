@@ -59,32 +59,8 @@ public class TerrainSystem implements HeightSampler {
   // ----------------------------------------------------------------------------
   public void render(SimpleShader shader, Camera cam) { renderer.render(shader, cam); }
 
-  // ----------------------------------------------------------------------------
-  // Picking
-  // ----------------------------------------------------------------------------
-  /** Ray-pick the terrain from screen space; writes hit to 'out'. Returns true on hit. */
-  public Vector3 raycastToGround(Ray ray, float step, int refineIters) {
-    return picking.rayIntersectTerrain(ray, this, step, refineIters);
-  }
-
-
-  // ----------------------------------------------------------------------------
-  // Editing (grid-space APIs; keep your existing tools working)
-  // ----------------------------------------------------------------------------
-  /** Raise/lower integer height samples inside a circle. */
-  public boolean editHeightsCircle(int gx, int gz, int radius, short delta) {
-    return editor.editHeightsCircle(gx, gz, radius, delta);
-  }
 
   /** Paint a texture id into a circular region (byte id, 0..255). */
-  public boolean paintTexCircle(int gx, int gz, int radius, byte texId) {
-    return editor.paintTexCircle(gx, gz, radius, texId);
-  }
-
-  /** Paint with strength (0..1) and falloff (0..1, 1=soft). */
-  public boolean paintTexCircle(int gx, int gz, int radius, byte texId, float strength, float falloff) {
-    return editor.paintTexCircle(gx, gz, radius, texId, strength, falloff);
-  }
 
   /** Rebuild meshes/LODs for any chunks that were marked dirty after edits. */
   public void rebuildDirtyChunks() { editor.rebuildDirtyChunks(); }
@@ -178,6 +154,8 @@ public class TerrainSystem implements HeightSampler {
   @Override public int getSamplesPerSide() { return world.S; }
   @Override public float getTileSize() { return world.tile; }
   @Override public float getYScale() { return world.yScale; }
+  public TerrainEditor getEditor() { return editor; }
+  public TerrainPicking getPicker() { return picking; }
 
   // ----------------------------------------------------------------------------
   // Misc

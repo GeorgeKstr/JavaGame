@@ -54,7 +54,7 @@ public final class RaiseLowerTool extends AbstractBrushTool {
 
   public RaiseLowerTool(TerrainSystem terrain, BrushSettings sharedBrush) { super(sharedBrush, terrain); }
 
-  @Override public String name() { return "Raise / Lower (Continuous, Accumulated)"; }
+  @Override public String name() { return "Raise/Lower"; }
 
   @Override
   public void buildUI(Table parent, Skin skin) {
@@ -105,8 +105,6 @@ public final class RaiseLowerTool extends AbstractBrushTool {
 
     applyAt(smoothWorld, Math.max(dt, MIN_EFFECTIVE_DT));
   }
-
-  // ===== Core =====
 
   private void applyAt(Vector3 wpos, float dt) {
     // Signed strength around 0.5
@@ -161,8 +159,8 @@ public final class RaiseLowerTool extends AbstractBrushTool {
 
       short delta = (short)Math.max(Short.MIN_VALUE, Math.min(Short.MAX_VALUE, deltaInt));
       if (delta == 0) continue;
-
-      terrain.editHeightsCircle(gx, gz, r, delta);
+      System.out.println("RaiseLower: r=" + r + " d=" + delta + " (part=" + part + " acc=" + acc + ")");
+      terrain.getEditor().editHeightsCircle(gx, gz, r, delta);
       any = true;
     }
 

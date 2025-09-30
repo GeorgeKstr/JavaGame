@@ -48,7 +48,7 @@ public final class BrushOverlay {
     Ray ray = ((PerspectiveCamera) cam).getPickRay(sx, sy);
 
     // Intersect against the terrain heightfield
-    Vector3 hit = terrain.raycastToGround(ray, Math.max(0.25f, tileSize * 0.5f), 8);
+    Vector3 hit = terrain.getPicker().rayIntersectTerrain(ray, terrain, 0.25f, 8);
     hasHit = (hit != null);
     if (!hasHit) return;
 

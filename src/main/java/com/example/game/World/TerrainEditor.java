@@ -14,7 +14,7 @@ import com.badlogic.gdx.utils.IntMap;
  *      * gentle "dust" cut still applies, but never below the target threshold
  *  - Supersampling and falloff logic from your version kept as-is.
  */
-final class TerrainEditor {
+public class TerrainEditor {
   private final TerrainWorld w;
 
   TerrainEditor(TerrainWorld w){ this.w = w; }
@@ -59,7 +59,8 @@ final class TerrainEditor {
     return c;
   }
 
-  boolean editHeightsCircle(int gx, int gz, int radius, short delta) {
+  public boolean editHeightsCircle(int gx, int gz, int radius, short delta) {
+    System.out.println("editHeightsCircle: " + gx + "," + gz + " r=" + radius + " d=" + delta);
     boolean changed=false; Index p=new Index(); Index[] ns={new Index(),new Index(),new Index(),new Index(),new Index(),new Index(),new Index(),new Index()};
     for (int dz=-radius; dz<=radius; dz++) for (int dx=-radius; dx<=radius; dx++) {
       if (dx*dx+dz*dz>radius*radius) continue;
@@ -83,7 +84,7 @@ final class TerrainEditor {
   }
 
   // New API: includes brush strength (0..1) and falloff (0..1, 1=soft)
-  boolean paintTexCircle(int gx, int gz, int radius, byte texId, float strength, float falloff) {
+  public boolean paintTexCircle(int gx, int gz, int radius, byte texId, float strength, float falloff) {
     boolean changed=false; Index p=new Index(); Index[] ns={new Index(),new Index(),new Index(),new Index(),new Index(),new Index(),new Index(),new Index()};
 
     // Clamp inputs once

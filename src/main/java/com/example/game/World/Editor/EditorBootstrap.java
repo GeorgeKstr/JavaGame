@@ -21,7 +21,9 @@ public final class EditorBootstrap {
       }
       @Override public Vector3 pickOnTerrain(int sx, int sy) {
         Ray ray = ((PerspectiveCamera) cam).getPickRay(sx, sy);
-        return terrain.raycastToGround(ray, 0.25f, 8);
+        Vector3 result = terrain.getPicker().rayIntersectTerrain(ray, terrain, 0.25f, 8);
+        System.out.println("pickOnTerrain: " + result);
+        return result;
       }
     });
   }

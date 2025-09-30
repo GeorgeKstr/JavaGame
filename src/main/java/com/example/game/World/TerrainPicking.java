@@ -15,7 +15,7 @@ import com.badlogic.gdx.math.collision.Ray;
  *   outside loaded area it falls back to intersecting the y=0 plane and then
  *   snaps y to terrain height at that XZ (which may still be default height).
  */
-final class TerrainPicking {
+public class TerrainPicking {
   private final TerrainWorld w;
 
   // Reusable scratch
@@ -32,7 +32,7 @@ final class TerrainPicking {
    * Raycast from screen (sx, sy) to the terrain. Writes the hit world position to 'out'.
    * @return true if a surface was hit (either actual terrain crossing, or plane fallback).
    */
-  protected Vector3 rayIntersectTerrain(Ray ray, HeightSampler s, float step, int refineIters) {
+  public Vector3 rayIntersectTerrain(Ray ray, HeightSampler s, float step, int refineIters) {
     float lastT = 0f;
     float lastDiff = Float.NaN; // ray.y - height
     Vector3 p = new Vector3();
