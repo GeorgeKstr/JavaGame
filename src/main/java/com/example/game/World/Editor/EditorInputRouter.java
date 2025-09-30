@@ -35,7 +35,7 @@ public final class EditorInputRouter extends InputAdapter {
      * Ray-pick the world at the current mouse; write to 'out' and return that same instance.
      * Return null if nothing was hit.
      */
-    Vector3 pickOnTerrain(int screenX, int screenY, Vector3 out);
+    Vector3 pickOnTerrain(int screenX, int screenY);
   }
 
   private final Access access;
@@ -45,8 +45,6 @@ public final class EditorInputRouter extends InputAdapter {
   private boolean mmbDown = false;
   private boolean rmbDown = false;
 
-  // scratch
-  private final Vector3 tmpWorld = new Vector3();
 
   public EditorInputRouter(Access access) {
     this.access = access;
@@ -76,6 +74,7 @@ public final class EditorInputRouter extends InputAdapter {
 
   @Override
   public boolean touchDragged(int screenX, int screenY, int pointer) {
+    //System.out.println("drag @ "+screenX+","+screenY+",  cursor at "+Gdx.input.getX()+","+Gdx.input.getY());
     if (mmbDown) {
       // MMB drag: orbit; Shift+MMB: pan
       boolean shift = Gdx.input.isKeyPressed(Input.Keys.SHIFT_LEFT) || Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT);
@@ -158,8 +157,9 @@ public final class EditorInputRouter extends InputAdapter {
   private void sendTool(int screenX, int screenY, boolean down) {
     EditorLayer layer = access.activeLayer();
     if (layer == null) return;
-
-    if (access.pickOnTerrain(screenX, screenY, tmpWorld) == null) return;
+    
+    Vector3 tmpWorld = access.pickOnTerrain(screenX, screenY);
+    if(tmpWorld== null) return;
 
     boolean shift = Gdx.input.isKeyPressed(Input.Keys.SHIFT_LEFT) || Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT);
     boolean ctrl  = Gdx.input.isKeyPressed(Input.Keys.CONTROL_LEFT) || Gdx.input.isKeyPressed(Input.Keys.CONTROL_RIGHT);
@@ -175,7 +175,8 @@ public final class EditorInputRouter extends InputAdapter {
     EditorLayer layer = access.activeLayer();
     if (layer == null) return;
 
-    if (access.pickOnTerrain(screenX, screenY, tmpWorld) == null) return;
+    Vector3 tmpWorld = access.pickOnTerrain(screenX, screenY);
+    if(tmpWorld== null) return;
 
     boolean shift = Gdx.input.isKeyPressed(Input.Keys.SHIFT_LEFT) || Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT);
     boolean ctrl  = Gdx.input.isKeyPressed(Input.Keys.CONTROL_LEFT) || Gdx.input.isKeyPressed(Input.Keys.CONTROL_RIGHT);

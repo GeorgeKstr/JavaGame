@@ -24,7 +24,7 @@ public final class TerrainLayer extends BaseToolLayer {
 
  // onActivate()
     @Override public void onActivate() {
-    if (overlay == null) overlay = new BrushOverlay(64);
+    if (overlay == null) overlay = new BrushOverlay(64, terrain);
     }
 
     // onDeactivate()

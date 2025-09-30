@@ -1,7 +1,9 @@
 package com.example.game.World.Editor;
 
 import com.badlogic.gdx.graphics.Camera;
+import com.badlogic.gdx.graphics.PerspectiveCamera;
 import com.badlogic.gdx.math.Vector3;
+import com.badlogic.gdx.math.collision.Ray;
 import com.example.game.World.TerrainSystem;
 
 public final class EditorBootstrap {
@@ -17,8 +19,9 @@ public final class EditorBootstrap {
       @Override public void moveWASD(boolean w, boolean a, boolean s, boolean d, float dt) { 
         edCam.move(cam, s, d, w, a, dt/3f); 
       }
-      @Override public Vector3 pickOnTerrain(int sx, int sy, Vector3 outWorld) {
-        return terrain.raycastToGround(cam, sx, sy, outWorld) ? outWorld : null;
+      @Override public Vector3 pickOnTerrain(int sx, int sy) {
+        Ray ray = ((PerspectiveCamera) cam).getPickRay(sx, sy);
+        return terrain.raycastToGround(ray, 0.25f, 8);
       }
     });
   }

@@ -3,6 +3,7 @@ package com.example.game.World;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.graphics.Camera;
 import com.badlogic.gdx.math.Vector3;
+import com.badlogic.gdx.math.collision.Ray;
 import com.example.game.Render.SimpleShader;
 
 import java.util.Map;
@@ -62,8 +63,8 @@ public class TerrainSystem implements HeightSampler {
   // Picking
   // ----------------------------------------------------------------------------
   /** Ray-pick the terrain from screen space; writes hit to 'out'. Returns true on hit. */
-  public boolean raycastToGround(Camera cam, int sx, int sy, Vector3 out) {
-    return picking.raycastToGround(cam, sx, sy, out);
+  public Vector3 raycastToGround(Ray ray, float step, int refineIters) {
+    return picking.rayIntersectTerrain(ray, this, step, refineIters);
   }
 
 

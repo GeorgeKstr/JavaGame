@@ -9,6 +9,7 @@ import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.math.collision.Ray;
 import com.example.game.World.HeightSampler;
+import com.example.game.World.TerrainSystem;
 
 /**
  * Terrain brush overlay (classic mode, like your old TerrainSystem circle).
@@ -26,8 +27,9 @@ public final class BrushOverlay {
   private final Vector3 center = new Vector3();
   private boolean hasHit = false;
   private float radiusWorld = 1f;
+  private final TerrainSystem terrain;
 
-  public BrushOverlay(int segments) {
+  public BrushOverlay(int segments, TerrainSystem terrain) {
     this.segments = Math.max(16, segments);
     this.rx = new float[this.segments];
     this.ry = new float[this.segments];
@@ -35,6 +37,7 @@ public final class BrushOverlay {
     this.frx = new float[this.segments];
     this.fry = new float[this.segments];
     this.frz = new float[this.segments];
+    this.terrain = terrain;
   }
 
   /** Update from mouse → world; brushRadiusTiles is in *cells*, tileSize in *meters*. */
@@ -45,7 +48,7 @@ public final class BrushOverlay {
     Ray ray = ((PerspectiveCamera) cam).getPickRay(sx, sy);
 
     // Intersect against the terrain heightfield
-    Vector3 hit = rayIntersectTerrain(ray, sampler, Math.max(0.25f, tileSize * 0.5f), 8);
+    Vector3 hit = terrain.raycastToGround(ray, Math.max(0.25f, tileSize * 0.5f), 8);
     hasHit = (hit != null);
     if (!hasHit) return;
 
@@ -117,37 +120,7 @@ public final class BrushOverlay {
   // --------------------------------------------------------------------------
   // Classic heightfield raycast: march forward and binary refine at sign change
   // --------------------------------------------------------------------------
-  private static Vector3 rayIntersectTerrain(Ray ray, HeightSampler s, float step, int refineIters) {
-    float lastT = 0f;
-    float lastDiff = Float.NaN; // ray.y - height
-    Vector3 p = new Vector3();
-
-    for (float t = step; t <= 4000f; t += step) {
-      p.set(ray.origin).mulAdd(ray.direction, t);
-      float h = s.heightAt(p.x, p.z, Float.NaN);
-      if (Float.isNaN(h)) { lastDiff = Float.NaN; lastT = t; continue; }
-
-      float diff = p.y - h;
-      if (!Float.isNaN(lastDiff) && Math.signum(lastDiff) != Math.signum(diff)) {
-        // Bracketed: binary search a few steps
-        float a = lastT, b = t;
-        for (int i = 0; i < refineIters; i++) {
-          float m = 0.5f * (a + b);
-          Vector3 pm = new Vector3(ray.origin).mulAdd(ray.direction, m);
-          float hm = s.heightAt(pm.x, pm.z, Float.NaN);
-          float dm = pm.y - hm;
-          if (dm > 0f) a = m; else b = m;
-        }
-        float hitT = 0.5f * (a + b);
-        Vector3 hit = new Vector3(ray.origin).mulAdd(ray.direction, hitT);
-        hit.y = s.heightAt(hit.x, hit.z, hit.y);
-        return hit;
-      }
-      lastDiff = diff;
-      lastT = t;
-    }
-    return null; // no intersection in range
-  }
+  
 
   public void setRadius(float radius) {
     this.radiusWorld = Math.max(1f, radius);

@@ -12,10 +12,12 @@ import com.example.game.World.Editor.BrushOverlay;
 /** Base for brush-style tools: provides shared BrushSettings + a small brush UI. */
 public abstract class AbstractBrushTool implements Tool {
   protected final BrushSettings brush;
-    private final TerrainSystem terrain;
-  private BrushOverlay overlay;
+  protected final TerrainSystem terrain;
+  protected BrushOverlay overlay;
   private Label rLbl;
+  private Label sLbl;
   private Slider r;
+  private Slider s;
 
   protected AbstractBrushTool(BrushSettings sharedBrush, TerrainSystem terrain) { 
     this.brush = sharedBrush; 
@@ -43,8 +45,8 @@ public abstract class AbstractBrushTool implements Tool {
 
     // --- Strength ---
     t = new Table();
-    final Label sLbl = new Label(String.format("Strength: %.2f", brush.getStrength()), skin);
-    final Slider s = new Slider(0.01f, 1f, 0.01f, false, skin);
+    sLbl = new Label(String.format("Strength: %.2f", brush.getStrength()), skin);
+    s = new Slider(0.01f, 1f, 0.01f, false, skin);
     s.setValue(brush.getStrength());
     s.addListener(new ChangeListener() {
       @Override public void changed(ChangeEvent event, Actor actor) {
@@ -80,12 +82,18 @@ public abstract class AbstractBrushTool implements Tool {
         if (rLbl != null) rLbl.setText(String.format("Radius: %.1f", brush.getRadius()));
         if (r != null) r.setValue(brush.getRadius());
         return true;
+    } else if (Gdx.input.isKeyPressed(Input.Keys.SHIFT_LEFT) && overlay != null) {
+        if(amountY < 0) brush.setStrength(Math.min(1f, brush.getStrength() + 0.01f));
+        else brush.setStrength(Math.max(0.01f, brush.getStrength() - 0.01f));
+        if (sLbl != null) sLbl.setText(String.format("Strength: %.2f", brush.getStrength()));
+        if (s != null) s.setValue(brush.getStrength());
+        return true;
     }
     return false;
 }
 
   @Override public void onSelected() {
-    if (overlay == null) overlay = new BrushOverlay(64);
+    if (overlay == null) overlay = new BrushOverlay(64, terrain);
   }
 
   @Override public void onDeselected() {
