@@ -13,11 +13,18 @@ public abstract class BaseToolLayer implements EditorLayer {
   protected final List<Tool> tools = new ArrayList<>();
   protected Tool active;
 
+  // NEW: a persistent content area we clear/rebuild
+  private final Table content = new Table();
+
   protected BaseToolLayer(String id, String displayName) {
     this.id = id; this.display = displayName;
+    content.top().left();
   }
 
-  protected void addTool(Tool t) { tools.add(t); if (active == null) { active = t; t.onSelected();} }
+  protected void addTool(Tool t) {
+    tools.add(t);
+    if (active == null) { active = t; t.onSelected(); }
+  }
 
   @Override public String id() { return id; }
   @Override public String displayName() { return display; }
@@ -26,40 +33,50 @@ public abstract class BaseToolLayer implements EditorLayer {
   @Override public void buildUI(Table parent, Skin skin) {
     parent.clear();
 
-    // tool buttons
+    // --- tool buttons bar ---
     Table bar = new Table();
     ButtonGroup<TextButton> group = new ButtonGroup<>();
-    bar.defaults().padRight(6);
+    group.setUncheckLast(true);   // do not allow unchecking the active toggle
 
+    bar.defaults().padRight(6);
     for (Tool t : tools) {
       TextButton b = new TextButton(t.name(), skin, "toggle");
       group.add(b);
       b.setChecked(t == active);
       final Tool TT = t;
       b.addListener(com.example.game.UI.SkinFactory.onClick(() -> {
+        if (active == TT) return;            // NEW: ignore re-click on the same tool
         if (active != null) active.onDeselected();
         active = TT;
-        rebuildToolUI(parent, skin); // rebuild below
+        group.setChecked(b.getText().toString()); // keep visual state sane
         active.onSelected();
+        rebuildToolUI(skin);
       }));
       bar.add(b);
     }
+
     parent.add(bar).left().row();
     parent.add(new Label(display + " Tools", skin, "title")).left().padTop(6).row();
-    // tool-specific UI goes here
-    rebuildToolUI(parent, skin);
-}
 
-private void rebuildToolUI(Table parent, Skin skin) {
-    // remove everything below the header rows and reconstruct
-    while (parent.getChildren().size > 2) parent.removeActorAt(2, true);
-    parent.add(new Label("Active Tool: " + (active != null ? active.name() : "None"), skin, "default")).left().padBottom(6).row();
-    Table toolUI = new Table(); toolUI.top().left();
-    if (active != null) active.buildUI(toolUI, skin);
-    parent.add(toolUI).left().top().growX().row();
+    // --- content area (persistent) ---
+    parent.add(content).left().top().growX().row();
+
+    // first build
+    rebuildToolUI(skin);
   }
 
-  /** Forward input to active tool (layers can override if they need hit-testing first). */
+  private void rebuildToolUI(Skin skin) {
+    content.clearChildren();                            // NEW: clear only the content area
+    content.add(new Label("Active Tool: " + (active != null ? active.name() : "None"),
+                          skin, "default")).left().padBottom(6).row();
+
+    Table toolUI = new Table(); toolUI.top().left();
+    if (active != null) active.buildUI(toolUI, skin);
+    content.add(toolUI).left().top().growX().row();
+    content.invalidateHierarchy();
+  }
+
+  // ---------------- input / lifecycle passthrough ----------------
   public void onPointerDown(Camera cam, Vector3 world, int button, boolean sh, boolean ctrl) {
     if (active != null) active.onPointerDown(world, button, sh, ctrl);
   }
@@ -72,7 +89,10 @@ private void rebuildToolUI(Table parent, Skin skin) {
 
   public Tool getActiveTool() { return active; }
 
-  @Override public void update(float dt) { if (active != null) active.update(dt, EditorContext.getCamera()); }
+  @Override public void update(float dt) {
+    if (active != null) active.update(dt, EditorContext.getCamera());
+  }
+
   @Override public void render3D(Camera cam) {
     if (active != null) active.render3D(cam);
   }
