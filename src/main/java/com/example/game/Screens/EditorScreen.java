@@ -15,6 +15,7 @@ import com.example.game.World.MapResource;
 import com.example.game.World.NewMapCreator;
 import com.example.game.World.TerrainSystem;
 import com.example.game.World.Editor.*; // EditorCamera, EditorContext, LayerManager, EditorInputRouter
+import com.example.game.World.Editor.Layers.PathsLayer;
 import com.example.game.World.Editor.Layers.TerrainLayer;
 import com.example.game.World.Editor.Layers.WalkLayer;
 import com.example.game.Render.Pipeline.RenderBootstrap;
@@ -78,6 +79,7 @@ public class EditorScreen implements Screen {
     hud = new EditorHUD();
     layers.add(new TerrainLayer(terrain, hud.skin()));
     layers.add(new WalkLayer(terrain, hud.skin()));
+    layers.add(new PathsLayer(terrain, hud.skin()));
 
     hud.build(layers, new EditorHUD.Callbacks() {
       @Override public void onBack() { app.goToMenu(); }
