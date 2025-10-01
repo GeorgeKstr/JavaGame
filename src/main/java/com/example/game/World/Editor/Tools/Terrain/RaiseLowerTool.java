@@ -159,8 +159,7 @@ public final class RaiseLowerTool extends AbstractBrushTool {
 
       short delta = (short)Math.max(Short.MIN_VALUE, Math.min(Short.MAX_VALUE, deltaInt));
       if (delta == 0) continue;
-      System.out.println("RaiseLower: r=" + r + " d=" + delta + " (part=" + part + " acc=" + acc + ")");
-      terrain.getEditor().editHeightsCircle(gx, gz, r, delta);
+      terrain.getEditor().editHeightsCircle(gx, gz, r/2, delta);
       any = true;
     }
 

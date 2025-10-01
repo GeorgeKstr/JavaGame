@@ -60,7 +60,6 @@ public class TerrainEditor {
   }
 
   public boolean editHeightsCircle(int gx, int gz, int radius, short delta) {
-    System.out.println("editHeightsCircle: " + gx + "," + gz + " r=" + radius + " d=" + delta);
     boolean changed=false; Index p=new Index(); Index[] ns={new Index(),new Index(),new Index(),new Index(),new Index(),new Index(),new Index(),new Index()};
     for (int dz=-radius; dz<=radius; dz++) for (int dx=-radius; dx<=radius; dx++) {
       if (dx*dx+dz*dz>radius*radius) continue;
@@ -77,6 +76,143 @@ public class TerrainEditor {
     }
     return changed;
   }
+
+  public boolean setHeightsToZeroCircle(int gx, int gz, int radius) {
+    if (radius <= 0) return false;
+
+    final int S = w.S;
+
+    // Pixel-centered circle so footprint matches overlay (no ~½-cell bleed)
+    final float rEdge = Math.max(0.0f, radius - 0.5f);
+    final float r2f   = rEdge * rEdge;
+
+    boolean changed = false;
+    Index p = new Index();
+    Index[] ns = {
+        new Index(), new Index(), new Index(), new Index(),
+        new Index(), new Index(), new Index(), new Index()
+    };
+
+    for (int dz = -radius; dz <= radius; dz++) {
+      for (int dx = -radius; dx <= radius; dx++) {
+        float d2 = (float)dx * dx + (float)dz * dz;
+        if (d2 > r2f) continue; // circle mask
+
+        int gxi = gx + dx, gzi = gz + dz;
+        if (!primaryIndex(gxi, gzi, p)) continue;
+
+        TerrainChunk tc = get(p.cx, p.cz);
+        if (tc == null) continue;
+
+        short[] arr = tc.getHeightsArray();
+        int idx = p.lz * S + p.lx;
+        short b = arr[idx];
+
+        if (b != 0) {
+          arr[idx] = 0;
+          tc.setDirty(true);
+          changed = true;
+
+          // Seam safety: mirror exact value to shared edge/corner samples
+          int ncount = neighborsForSample(p, ns);
+          for (int i = 0; i < ncount; i++) {
+            TerrainChunk nb = get(ns[i].cx, ns[i].cz); if (nb == null) continue;
+            short[] harr = nb.getHeightsArray();
+            int nidx = ns[i].lz * S + ns[i].lx;
+            if (harr[nidx] != 0) { harr[nidx] = 0; nb.setDirty(true); }
+          }
+        }
+      }
+    }
+    return changed;
+  }
+
+
+  public boolean polishCircle(int gx, int gz, int radius, float strength) {
+    strength = clamp01(strength);
+    if (strength <= 0f || radius <= 0) return false;
+
+    final int S = w.S;
+    final int R2 = radius * radius;
+
+    // 20x20 box around each center cell; even size needs asymmetric offsets.
+    // This yields 20 samples across: [-10 .. +9]
+    final int BOX_HALF = 10;
+    final int BOX_MIN  = -BOX_HALF;
+    final int BOX_MAX  = +BOX_HALF - 1; // inclusive
+
+    boolean changed = false;
+    Index p = new Index();
+    Index[] ns = {
+        new Index(), new Index(), new Index(), new Index(),
+        new Index(), new Index(), new Index(), new Index()
+    };
+
+    // Helper: sample absolute height at global grid coord (handles chunk borders)
+    final java.util.function.BiFunction<Integer,Integer,Short> sample = (Gx, Gz) -> {
+      Index sp = new Index();
+      if (!primaryIndex(Gx, Gz, sp)) return (short)0;
+      TerrainChunk c = get(sp.cx, sp.cz);
+      if (c == null) return (short)0;
+      short[] arr = c.getHeightsArray();
+      int idx = sp.lz * S + sp.lx;
+      return arr[idx];
+    };
+
+    for (int dz = -radius; dz <= radius; dz++) {
+      for (int dx = -radius; dx <= radius; dx++) {
+        // Circle mask for the stamped area
+        if (dx*dx + dz*dz > R2) continue;
+
+        int gxi = gx + dx, gzi = gz + dz;
+        if (!primaryIndex(gxi, gzi, p)) continue;
+
+        TerrainChunk tc = get(p.cx, p.cz);
+        if (tc == null) continue;
+
+        short[] arr = tc.getHeightsArray();
+        int idx = p.lz * S + p.lx;
+        short b = arr[idx];
+
+        // 20x20 local mean BUT only from neighbors that are ALSO inside the same brush circle
+        int sum = 0, count = 0;
+        for (int oz = BOX_MIN; oz <= BOX_MAX; oz++) {
+          for (int ox = BOX_MIN; ox <= BOX_MAX; ox++) {
+            int rdx = dx + ox;
+            int rdz = dz + oz;
+            if (rdx*rdx + rdz*rdz > R2) continue; // kernel masked to brush
+            sum += sample.apply(gxi + ox, gzi + oz);
+            count++;
+          }
+        }
+        // Always include the center if the mask filtered everything (very rare)
+        if (count == 0) { sum = b; count = 1; }
+
+        float avg = sum / (float)count;
+
+        // Relax toward masked local mean
+        float nf = b + (avg - b) * strength;
+        short a = (short)Math.max(Short.MIN_VALUE, Math.min(Short.MAX_VALUE, Math.round(nf)));
+
+        if (a != b) {
+          arr[idx] = a; tc.setDirty(true); changed = true;
+
+          // Mirror exact value to shared edge/corner samples to avoid cracks
+          int ncount = neighborsForSample(p, ns);
+          for (int i = 0; i < ncount; i++) {
+            TerrainChunk nb = get(ns[i].cx, ns[i].cz); if (nb == null) continue;
+            short[] harr = nb.getHeightsArray();
+            int nidx = ns[i].lz * S + ns[i].lx;
+            if (harr[nidx] != a) { harr[nidx] = a; nb.setDirty(true); }
+          }
+        }
+      }
+    }
+
+    return changed;
+  }
+
+
 
   boolean paintTexCircle(int gx, int gz, int radius, byte texId) {
     // Back-compat default strength/falloff

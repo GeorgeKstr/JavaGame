@@ -137,7 +137,7 @@ public class EditorScreen implements Screen {
     edCam.update(cam);
     var f = edCam.focus();
     terrain.updateAndStream(f.x, f.z);
-    layers.update(dt);
+    layers.update(dt, hud.skin());
     layers.render3D(cam);
 
     // Clear

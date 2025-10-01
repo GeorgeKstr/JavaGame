@@ -1,5 +1,7 @@
 package com.example.game.World.Editor;
 
+import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.Input;
 import com.badlogic.gdx.graphics.Camera;
 import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.scenes.scene2d.ui.*;
@@ -12,6 +14,7 @@ public abstract class BaseToolLayer implements EditorLayer {
   private final String id, display;
   protected final List<Tool> tools = new ArrayList<>();
   protected Tool active;
+  private ButtonGroup<TextButton> group;
 
   // NEW: a persistent content area we clear/rebuild
   private final Table content = new Table();
@@ -35,7 +38,7 @@ public abstract class BaseToolLayer implements EditorLayer {
 
     // --- tool buttons bar ---
     Table bar = new Table();
-    ButtonGroup<TextButton> group = new ButtonGroup<>();
+    group = new ButtonGroup<>();
     group.setUncheckLast(true);   // do not allow unchecking the active toggle
 
     bar.defaults().padRight(6);
@@ -89,7 +92,26 @@ public abstract class BaseToolLayer implements EditorLayer {
 
   public Tool getActiveTool() { return active; }
 
-  @Override public void update(float dt) {
+  @Override public void update(float dt, Skin skin) {
+    int numKey = -1;
+    if (Gdx.input.isKeyPressed(Input.Keys.NUM_1)) numKey = 1;
+    else if (Gdx.input.isKeyPressed(Input.Keys.NUM_2)) numKey = 2;
+    else if (Gdx.input.isKeyPressed(Input.Keys.NUM_3)) numKey = 3;
+    else if (Gdx.input.isKeyPressed(Input.Keys.NUM_4)) numKey = 4;
+    else if (Gdx.input.isKeyPressed(Input.Keys.NUM_5)) numKey = 5;
+    else if (Gdx.input.isKeyPressed(Input.Keys.NUM_6)) numKey = 6;
+    else if (Gdx.input.isKeyPressed(Input.Keys.NUM_7)) numKey = 7;
+    else if (Gdx.input.isKeyPressed(Input.Keys.NUM_8)) numKey = 8;
+    else if (Gdx.input.isKeyPressed(Input.Keys.NUM_9)) numKey = 9;
+    if (numKey != -1) {
+      int toolIndex = numKey - 1;
+      if (toolIndex >= 0 && toolIndex < tools.size()) {
+        active = tools.get(toolIndex);
+        active.onSelected();
+        rebuildToolUI(skin);
+        group.setChecked(active.name());
+      }
+    }
     if (active != null) active.update(dt, EditorContext.getCamera());
   }
 

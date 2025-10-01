@@ -51,9 +51,9 @@ public final class LayerManager {
   }
 
   /** Per-frame tick for the active layer. */
-  public void update(float dt) {
+  public void update(float dt, Skin skin) {
     if (active != null) {
-      active.update(dt);
+      active.update(dt, skin);
     }
   }
 

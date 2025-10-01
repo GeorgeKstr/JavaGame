@@ -13,7 +13,7 @@ public interface EditorLayer {
   void onActivate();
   void onDeactivate();
 
-  void update(float dt);
+  void update(float dt, Skin skin);
   void render3D(Camera cam);
 
   /** Build (or rebuild) this layer's tools into the provided left pane. */

@@ -5,9 +5,10 @@ import com.example.game.World.TerrainSystem;
 import com.example.game.World.Editor.BaseToolLayer;
 import com.example.game.World.Editor.BrushOverlay;
 import com.example.game.World.Editor.Tools.BrushSettings;
+import com.example.game.World.Editor.Tools.Terrain.FlattenTool;
 import com.example.game.World.Editor.Tools.Terrain.PaintTextureTool;
 import com.example.game.World.Editor.Tools.Terrain.RaiseLowerTool;
-import com.example.game.World.Editor.Tools.Terrain.PolishSmoothTool;
+import com.example.game.World.Editor.Tools.Terrain.PolishTool;
 
 public final class TerrainLayer extends BaseToolLayer {
   private final TerrainSystem terrain;
@@ -21,7 +22,8 @@ public final class TerrainLayer extends BaseToolLayer {
     // add your tools here, e.g.:
     addTool(new RaiseLowerTool(terrain, brush));
     addTool(new PaintTextureTool(terrain, brush));
-    addTool(new PolishSmoothTool(terrain, brush));
+    addTool(new PolishTool(terrain, brush));
+    addTool(new FlattenTool(terrain, brush));
   }
 
  // onActivate()
@@ -35,8 +37,8 @@ public final class TerrainLayer extends BaseToolLayer {
     }
 
     // update(dt)
-    @Override public void update(float dt) {
-    super.update(dt);
+    @Override public void update(float dt, Skin skin) {
+    super.update(dt, skin);
     
     }
 
