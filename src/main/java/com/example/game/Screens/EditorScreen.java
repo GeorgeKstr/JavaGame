@@ -20,6 +20,8 @@ import com.example.game.World.Editor.Layers.TerrainLayer;
 import com.example.game.World.Editor.Layers.WalkLayer;
 import com.example.game.Render.Pipeline.RenderBootstrap;
 import com.example.game.Config.Settings;
+import com.example.game.Config.cvar.CVars;
+import com.example.game.Config.cvar.PrefsCVarStore;
 
 public class EditorScreen implements Screen {
   private final GameApp app;
@@ -60,20 +62,47 @@ public class EditorScreen implements Screen {
     ensureMapExists(mapPath);
     map = MapResource.loadFromFile(mapPath);
     terrain = new TerrainSystem(map);
+    // Apply initial render toggles
+    terrain.setWireframe(Boolean.TRUE.equals(CVars.RENDER_TERRAIN_WIREFRAME.get()));
+    terrain.setChunkGrid(Boolean.TRUE.equals(CVars.RENDER_TERRAIN_CHUNK_GRID.get()));
 
-    // Initial values from settings
-    hour = settings.timeOfDayHour;           // persist time-of-day
+    // Initial values from CVars (kept in sync with Settings)
+    hour = CVars.RENDER_TIME_OF_DAY.get();
     updateSunFromHour();
 
     // Render pipeline
     ctx = new RenderContext(cam, sunDirWorld);
     pipeline = RenderBootstrap.build(ctx, terrain, RenderBootstrap.Config.defaultConfig());
 
-    // Apply persisted visual params before UI builds
-    pipeline.get(SkyPass.class).setSunSizeDeg(settings.sunSizeDeg);
-    pipeline.get(SkyPass.class).setWarmth(settings.skyWarmth);
-    pipeline.get(GodRaysPass.class).setExposure(settings.godRaysExposure);
-    pipeline.get(TerrainPass.class).setViewRadius(settings.viewRadiusChunks);
+    // Apply persisted visual params before UI builds (from CVars)
+    pipeline.get(SkyPass.class).setSunSizeDeg(CVars.RENDER_SUN_SIZE_DEG.get());
+    pipeline.get(SkyPass.class).setWarmth(CVars.RENDER_SKY_WARMTH.get());
+    pipeline.get(GodRaysPass.class).setExposure(CVars.RENDER_GODRAYS_EXP.get());
+    pipeline.get(TerrainPass.class).setViewRadius(CVars.VIEW_RADIUS_CHUNKS.get());
+
+    // Follow CVars automatically (cross-screen sync)
+    CVars.RENDER_SUN_SIZE_DEG.onChanged(v -> {
+      float val = v == null ? 1.5f : v;
+      pipeline.get(SkyPass.class).setSunSizeDeg(val);
+    });
+    CVars.RENDER_SKY_WARMTH.onChanged(v -> {
+      float val = v == null ? 0.5f : v;
+      pipeline.get(SkyPass.class).setWarmth(val);
+    });
+    CVars.RENDER_GODRAYS_EXP.onChanged(v -> {
+      float val = v == null ? 3f : v;
+      pipeline.get(GodRaysPass.class).setExposure(val);
+    });
+    CVars.VIEW_RADIUS_CHUNKS.onChanged(v -> {
+      int val = v == null ? 3 : v;
+      pipeline.get(TerrainPass.class).setViewRadius(val);
+    });
+    CVars.RENDER_TIME_OF_DAY.onChanged(v -> {
+      hour = v == null ? 12f : v;
+      updateSunFromHour();
+    });
+    CVars.RENDER_TERRAIN_WIREFRAME.onChanged(v -> terrain.setWireframe(Boolean.TRUE.equals(v)));
+    CVars.RENDER_TERRAIN_CHUNK_GRID.onChanged(v -> terrain.setChunkGrid(Boolean.TRUE.equals(v)));
 
     // HUD
     hud = new EditorHUD();
@@ -86,43 +115,22 @@ public class EditorScreen implements Screen {
 
       @Override public void onSave() { saveMap(); }
 
-      @Override public void onHourChanged(float h) {
-        hour = h;
-        settings.timeOfDayHour = h;
-        SettingsStore.save(settings);
-        updateSunFromHour();
-      }
+      @Override public void onHourChanged(float h) { CVars.RENDER_TIME_OF_DAY.set(h); }
 
-      @Override public void onSunSizeChanged(float deg) {
-        pipeline.get(SkyPass.class).setSunSizeDeg(deg);
-        settings.sunSizeDeg = deg;
-        SettingsStore.save(settings);
-      }
+      @Override public void onSunSizeChanged(float deg) { CVars.RENDER_SUN_SIZE_DEG.set(deg); }
 
-      @Override public void onWarmthChanged(float w) {
-        pipeline.get(SkyPass.class).setWarmth(w);
-        settings.skyWarmth = w;
-        SettingsStore.save(settings);
-      }
+      @Override public void onWarmthChanged(float w) { CVars.RENDER_SKY_WARMTH.set(w); }
 
-      @Override public void onGodRaysChanged(float e) {
-        pipeline.get(GodRaysPass.class).setExposure(e);
-        settings.godRaysExposure = e;
-        SettingsStore.save(settings);
-      }
+      @Override public void onGodRaysChanged(float e) { CVars.RENDER_GODRAYS_EXP.set(e); }
 
-      @Override public void onViewDistanceChanged(int r) {
-        pipeline.get(TerrainPass.class).setViewRadius(r);
-        settings.viewRadiusChunks = r;
-        SettingsStore.save(settings);
-      }
+      @Override public void onViewDistanceChanged(int r) { CVars.VIEW_RADIUS_CHUNKS.set(r); }
     },
-    // Initial values for HUD sliders/knobs:
-    /* initialHour */ settings.timeOfDayHour,
-    /* initialWarmth */ settings.skyWarmth,
-    /* initialSunSize */ settings.sunSizeDeg,
-    /* initialGodRays */ settings.godRaysExposure,
-    /* initialViewRadius */ settings.viewRadiusChunks
+    // Initial values for HUD sliders/knobs from CVars
+    /* initialHour */ CVars.RENDER_TIME_OF_DAY.get(),
+    /* initialWarmth */ CVars.RENDER_SKY_WARMTH.get(),
+    /* initialSunSize */ CVars.RENDER_SUN_SIZE_DEG.get(),
+    /* initialGodRays */ CVars.RENDER_GODRAYS_EXP.get(),
+    /* initialViewRadius */ CVars.VIEW_RADIUS_CHUNKS.get()
     );
 
     // Input
@@ -183,7 +191,9 @@ public class EditorScreen implements Screen {
   @Override public void resume() {}
   @Override public void hide() {}
   @Override public void dispose() {
-    SettingsStore.save(settings); // ensure last UI tweaks persist
+    // Persist latest CVars and legacy settings facade
+    PrefsCVarStore.saveAll(CVars.reg);
+    SettingsStore.save(settings);
     if (pipeline != null) pipeline.close();
     if (hud != null) hud.dispose();
     if (terrain != null) terrain.dispose();

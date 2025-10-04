@@ -59,6 +59,10 @@ public class TerrainSystem implements HeightSampler {
   // ----------------------------------------------------------------------------
   public void render(SimpleShader shader, Camera cam) { renderer.render(shader, cam); }
 
+  // Rendering toggles
+  public void setWireframe(boolean on) { renderer.setWireframe(on); }
+  public void setChunkGrid(boolean on) { renderer.setDrawGrid(on); }
+
 
   /** Paint a texture id into a circular region (byte id, 0..255). */
 

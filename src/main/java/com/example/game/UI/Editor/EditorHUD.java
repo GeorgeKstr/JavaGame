@@ -10,6 +10,8 @@ import com.badlogic.gdx.utils.viewport.ScreenViewport;
 import com.example.game.UI.SkinFactory;
 import com.example.game.World.Editor.LayerManager;
 import com.example.game.World.Editor.EditorLayer;
+import com.example.game.Config.cvar.CVars;
+import com.example.game.UI.CVar.CVarUI;
 
 public final class EditorHUD implements Disposable {
   public interface Callbacks {
@@ -162,6 +164,15 @@ public final class EditorHUD implements Disposable {
       }
     });
     parent.add(distanceSlider).width(240).height(32).row();
+
+    // --- Debug/Overlays ---
+    parent.add(new Label("Debug / Overlays", skin, "title")).left().padTop(12).row();
+    // Wireframe toggle
+    CheckBox wire = CVarUI.checkbox("Wireframe terrain", skin, CVars.RENDER_TERRAIN_WIREFRAME);
+    parent.add(wire).left().padTop(4).row();
+    // Chunk grid toggle
+    CheckBox grid = CVarUI.checkbox("Show chunk grid", skin, CVars.RENDER_TERRAIN_CHUNK_GRID);
+    parent.add(grid).left().padTop(4).row();
   }
 
   public void setFps(int fps) { if (fpsLabel != null) fpsLabel.setText("FPS: " + fps); }
