@@ -153,7 +153,9 @@ public class TerrainSystem implements HeightSampler {
   // HeightSampler (for generic sampling clients)
   // ----------------------------------------------------------------------------
   @Override public float heightAt(float x, float z, float defaultHeight) {
-    return world.sampleHeightAtWorld(x, z, defaultHeight);
+    float base = world.sampleHeightAtWorld(x, z, defaultHeight);
+    HeightModifier hm = world.heightModifier;
+    return (hm != null) ? base + hm.deltaAt(x, z) : base;
   }
   @Override public int getSamplesPerSide() { return world.S; }
   @Override public float getTileSize() { return world.tile; }
@@ -161,11 +163,107 @@ public class TerrainSystem implements HeightSampler {
   public TerrainEditor getEditor() { return editor; }
   public TerrainPicking getPicker() { return picking; }
 
+  /** HeightSampler that uses each chunk's baseline heights if available, otherwise current heights.
+   * Ignores non-destructive modifiers. Useful for ribbons that should follow the base map. */
+  public HeightSampler getBaseHeightSampler() {
+    return new HeightSampler() {
+      @Override public float heightAt(float x, float z, float defaultHeight) {
+        return sampleBaseHeightAtWorld(x, z, defaultHeight);
+      }
+      @Override public int getSamplesPerSide() { return world.S; }
+      @Override public float getTileSize() { return world.tile; }
+      @Override public float getYScale() { return world.yScale; }
+    };
+  }
+
+  private float sampleBaseHeightAtWorld(float x, float z, float def) {
+    int S = world.S;
+    int cpc = S - 1;
+    int cx = (int)Math.floor(x / (cpc * world.tile));
+    int cz = (int)Math.floor(z / (cpc * world.tile));
+    TerrainChunk c = world.chunks.get(TerrainWorld.key(cx, cz));
+    if (c == null) return def;
+    float lx = (x - c.getOriginX()) / c.getTile();
+    float lz = (z - c.getOriginZ()) / c.getTile();
+    if (lx < 0f || lz < 0f || lx > S - 1.001f || lz > S - 1.001f) return def;
+    int x0 = (int)Math.floor(lx), z0 = (int)Math.floor(lz);
+    int x1 = x0 + 1, z1 = z0 + 1;
+    float tx = lx - x0, tz = lz - z0;
+    short[] base = c.getBaselineArray();
+    short[] arr = (base != null) ? base : c.getHeightsArray();
+    float ys = c.getYScale();
+    float h00 = arr[z0 * S + x0] * ys;
+    float h10 = arr[z0 * S + x1] * ys;
+    float h01 = arr[z1 * S + x0] * ys;
+    float h11 = arr[z1 * S + x1] * ys;
+    float hx0 = h00 + (h10 - h00) * tx;
+    float hx1 = h01 + (h11 - h01) * tx;
+    return hx0 + (hx1 - hx0) * tz;
+  }
+
   // ----------------------------------------------------------------------------
   // Misc
   // ----------------------------------------------------------------------------
   public boolean hasChunk(int cx, int cz) { return world.chunks.containsKey(TerrainWorld.key(cx, cz)); }
   public MapResource getMap() { return world.map; }
+
+  /** Install a non-destructive height modifier (e.g., rivers). Triggers LOD rebuild next frame. */
+  public void setHeightModifier(HeightModifier m) {
+    world.heightModifier = m;
+    // Mark all chunks dirty so LOD meshes rebuild with modifier-applied vertex heights
+    for (com.badlogic.gdx.utils.IntMap.Entry<TerrainChunk> e : world.chunks) e.value.setDirty(true);
+  }
+
+  /**
+   * Bake river depths into the terrain heightmap by stamping circles along each river spline.
+   * This permanently modifies the CPU height arrays and triggers LOD rebuilds.
+   *
+   * @param rivers list of splines (will process only those with type RIVER)
+   * @param samplesPerSegment sampling density along each spline segment
+   */
+  public void bakeRiversDepth(java.util.List<com.example.game.World.Splines.TerrainSpline> rivers, int samplesPerSegment) {
+    if (rivers == null || rivers.isEmpty()) return;
+    final float tile = world.tile;
+    final float yScale = world.yScale;
+
+    // One-time: ensure every loaded chunk has a baseline to restore from (does not overwrite if already present)
+    for (com.badlogic.gdx.utils.IntMap.Entry<TerrainChunk> e : world.chunks) e.value.ensureBaseline();
+
+    for (com.example.game.World.Splines.TerrainSpline s : rivers) {
+      if (s.getType() != com.example.game.World.Splines.TerrainSpline.Type.RIVER) continue;
+      java.util.List<com.badlogic.gdx.math.Vector3> pts = s.samplePositions(Math.max(2, samplesPerSegment));
+      if (pts.size() < 2) continue;
+      int radiusCells = Math.max(1, Math.round((s.width * 0.5f) / tile));
+
+      // Reset all affected chunks to their baseline BEFORE stamping, so we start from base heightmap
+      // Collect affected chunk keys by sample points expanded by radius
+      com.badlogic.gdx.utils.IntSet affected = new com.badlogic.gdx.utils.IntSet();
+      int cpc = world.S - 1;
+      for (com.badlogic.gdx.math.Vector3 p : pts) {
+        int minCx = (int)Math.floor((p.x - radiusCells * tile) / (cpc * tile));
+        int maxCx = (int)Math.floor((p.x + radiusCells * tile) / (cpc * tile));
+        int minCz = (int)Math.floor((p.z - radiusCells * tile) / (cpc * tile));
+        int maxCz = (int)Math.floor((p.z + radiusCells * tile) / (cpc * tile));
+        for (int cz = minCz; cz <= maxCz; cz++)
+          for (int cx = minCx; cx <= maxCx; cx++)
+            affected.add(TerrainWorld.key(cx, cz));
+      }
+      for (com.badlogic.gdx.utils.IntSet.IntSetIterator it = affected.iterator(); it.hasNext; ) {
+        int k = it.next();
+        TerrainChunk c = world.chunks.get(k);
+        if (c != null) c.restoreAllFromBaseline();
+      }
+
+      // Second pass: stamp river depth using profiled + clamped application to avoid over-deepen overlaps
+      for (com.badlogic.gdx.math.Vector3 p : pts) {
+        int gx = Math.round(p.x / tile);
+        int gz = Math.round(p.z / tile);
+        editor.applyRiverDepthCircleProfiledClamped(gx, gz, radiusCells, s.riverDepth, s.bankFalloff);
+      }
+    }
+    // Rebuild meshes to reflect changes
+    editor.rebuildDirtyChunks();
+  }
 
   public void dispose() {
     renderer.dispose();

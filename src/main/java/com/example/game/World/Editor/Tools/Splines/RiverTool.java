@@ -1,0 +1,299 @@
+package com.example.game.World.Editor.Tools.Splines;
+
+import com.badlogic.gdx.graphics.Camera;
+import com.badlogic.gdx.graphics.GL20;
+import com.badlogic.gdx.graphics.glutils.ImmediateModeRenderer20;
+import com.badlogic.gdx.math.Vector3;
+import com.badlogic.gdx.scenes.scene2d.Actor;
+import com.badlogic.gdx.scenes.scene2d.ui.*;
+import com.badlogic.gdx.scenes.scene2d.utils.ChangeListener;
+import com.example.game.Config.cvar.CVars;
+import com.example.game.World.Editor.Tools.Tool;
+import com.example.game.World.Editor.Layers.SplinesLayer;
+import com.example.game.World.Splines.TerrainSpline;
+import com.example.game.World.Splines.TerrainSplineNode;
+import com.example.game.World.TerrainSystem;
+import com.badlogic.gdx.Gdx;
+import com.example.game.World.Editor.EditorContext;
+
+import java.util.List;
+
+/** Tool for placing and editing RIVER splines. */
+public final class RiverTool implements Tool {
+  private final SplinesLayer layer;
+  private final TerrainSystem terrain;
+  private final ImmediateModeRenderer20 im = new ImmediateModeRenderer20(65536, false, true, 0);
+
+  private TerrainSpline active;
+  private boolean dragging = false;
+
+  // UI controls to allow syncing on selection changes within the tool
+  private Slider widthSlider; private Label widthLabel;
+  private Slider depthSlider; private Label depthLabel;
+  private Slider steepSlider; private Label steepLabel;
+  private TerrainSpline lastBoundForUI;
+
+  public RiverTool(SplinesLayer layer, TerrainSystem terrain) {
+    this.layer = layer; this.terrain = terrain;
+  }
+
+  @Override public String name() { return "River"; }
+
+  @Override public void buildUI(Table container, Skin skin) {
+    container.add(new Label("River spline editing", skin, "title")).left().row();
+    container.add(new Label("Left-click: select • Drag: move • Ctrl+Click: add node • Click empty: unselect", skin)).left().row();
+
+    // Selected spline info and width/depth controls (only show if selected spline is RIVER)
+    TerrainSpline sel = layer.getSelectedSpline();
+    if (sel != null && sel.getType() != TerrainSpline.Type.RIVER) sel = null;
+    String name = (sel == null ? "None" : (sel.getType()+" (#"+sel.hashCode()+")"));
+    container.add(new Label("Selected: "+name, skin)).left().padTop(6).row();
+
+    Table wtbl = new Table();
+    widthLabel = new Label("Width: "+ (sel==null?"-":String.format("%.1f m", sel.width)), skin);
+    widthSlider = new Slider(1f, 50f, 0.5f, false, skin);
+    if (sel != null) widthSlider.setValue(sel.width);
+    widthSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+      TerrainSpline s = layer.getSelectedSpline(); if (s==null) return; s.width = widthSlider.getValue(); s.markRibbonDirty(); widthLabel.setText(String.format("Width: %.1f m", s.width)); }});
+    wtbl.add(widthLabel).left().row();
+    wtbl.add(widthSlider).width(240).row();
+    container.add(wtbl).left().padBottom(8).row();
+
+    Table dt = new Table();
+    depthLabel = new Label("Depth: "+ (sel==null?"-":String.format("%.1f m", sel.riverDepth)), skin);
+    depthSlider = new Slider(0.1f, 20f, 0.1f, false, skin);
+    if (sel != null) depthSlider.setValue(sel.riverDepth);
+    depthSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+      TerrainSpline s = layer.getSelectedSpline(); if (s==null || s.getType()!=TerrainSpline.Type.RIVER) return; s.riverDepth = depthSlider.getValue(); s.markRibbonDirty(); depthLabel.setText(String.format("Depth: %.1f m", s.riverDepth)); }});
+    dt.add(depthLabel).left().row();
+    dt.add(depthSlider).width(240).row();
+    container.add(dt).left().padBottom(8).row();
+
+    // Steepness slider (controls edge profile exponent via bankFalloff 0..1)
+    Table st = new Table();
+    steepLabel = new Label("Steepness: "+ (sel==null?"-":String.format("%.2f", sel.bankFalloff)), skin);
+    steepSlider = new Slider(0f, 1f, 0.01f, false, skin);
+    if (sel != null) steepSlider.setValue(sel.bankFalloff);
+    steepSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+      TerrainSpline s = layer.getSelectedSpline(); if (s==null || s.getType()!=TerrainSpline.Type.RIVER) return; s.bankFalloff = steepSlider.getValue(); s.markRibbonDirty(); steepLabel.setText(String.format("Steepness: %.2f", s.bankFalloff)); }});
+    st.add(steepLabel).left().row();
+    st.add(steepSlider).width(240).row();
+    container.add(st).left().padBottom(8).row();
+
+    // Texture select + import
+    Table t = new Table();
+    t.add(new Label("Texture:", skin)).left().padRight(6);
+    final SelectBox<String> sb = new SelectBox<>(skin);
+    sb.setItems(layer.listSplineTextureNames());
+    if (sel != null) {
+      String[] names = layer.listSplineTextureNames();
+      if (sel.textureId >=0 && sel.textureId < names.length) sb.setSelected(names[sel.textureId]);
+    }
+    sb.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+      TerrainSpline s = layer.getSelectedSpline(); if (s==null) return; String[] names = layer.listSplineTextureNames();
+      String val = sb.getSelected(); for (int i=0;i<names.length;i++){ if (names[i].equals(val)) { s.textureId = i; break; } }
+    }});
+    TextButton imp = new TextButton("Import...", skin);
+    imp.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+      int id = layer.importSplineTextureDesktop(); if (id>=0) { sb.setItems(layer.listSplineTextureNames()); sb.setSelectedIndex(id); TerrainSpline s = layer.getSelectedSpline(); if (s!=null) s.textureId=id; }
+    }});
+    t.add(sb).width(200).padRight(6);
+    t.add(imp).width(100);
+    container.add(t).left().row();
+
+    // Nodes list for the selected spline
+    if (sel != null) {
+      container.add(new Label("Nodes:", skin, "title")).left().padTop(8).row();
+      Table lt = new Table();
+      final com.badlogic.gdx.scenes.scene2d.ui.List<String> nodeList = new com.badlogic.gdx.scenes.scene2d.ui.List<>(skin);
+      nodeList.setItems(buildNodeLabels(sel));
+      nodeList.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+        TerrainSpline cur = layer.getSelectedSpline();
+        if (cur == null || cur.getType()!=TerrainSpline.Type.RIVER) return;
+        int idx = nodeList.getSelectedIndex(); if (idx >= 0 && idx < cur.size()) layer.select(cur, idx);
+      }});
+      ScrollPane sp = new ScrollPane(nodeList, skin);
+      sp.setFadeScrollBars(false);
+      lt.add(sp).width(260).height(120).row();
+      TextButton del = new TextButton("Delete Selected Node", skin);
+      del.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+        TerrainSpline cur = layer.getSelectedSpline();
+        if (cur == null || cur.getType()!=TerrainSpline.Type.RIVER) return;
+        int idx = nodeList.getSelectedIndex(); if (idx>=0 && idx < cur.size()) { cur.removeNode(idx); layer.select(cur, Math.min(idx, cur.size()-1)); nodeList.setItems(buildNodeLabels(cur)); }
+      }});
+      lt.add(del).left().padTop(6);
+      container.add(lt).left().row();
+    }
+
+    // Bake button
+    TextButton bake = new TextButton("Bake River Depth to Terrain", skin);
+    bake.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+      // Sample density: 8 per segment by default for decent coverage
+      terrain.bakeRiversDepth(layer.getSplines(), 8);
+      // After baking, invalidate all ribbons so they resample heights from base
+      for (TerrainSpline s : layer.getSplines()) s.markRibbonDirty();
+    }});
+    container.add(bake).left().padTop(8).row();
+  }
+
+  @Override public void onSelected() { active = null; dragging = false; layer.clearSelection(); }
+
+  @Override public void onPointerDown(Vector3 world, int button, boolean shift, boolean ctrl) {
+    if (button == com.badlogic.gdx.Input.Buttons.LEFT) {
+      if (ctrl) {
+        TerrainSpline sel = layer.getSelectedSpline();
+        if (sel == null) sel = layer.createSpline(TerrainSpline.Type.RIVER);
+        float baseY = terrain.getBaseHeightSampler().heightAt(world.x, world.z, world.y);
+        float y = baseY + 0.05f; // slight lift above baseline for visibility/picking
+        sel.addNode(new TerrainSplineNode(world.x, y, world.z));
+        layer.select(sel, sel.size()-1);
+        // Sync sliders to this spline
+        if (widthSlider != null) { widthSlider.setValue(sel.width); widthLabel.setText(String.format("Width: %.1f m", sel.width)); }
+        if (depthSlider != null) { depthSlider.setValue(sel.riverDepth); depthLabel.setText(String.format("Depth: %.1f m", sel.riverDepth)); }
+        if (steepSlider != null) { steepSlider.setValue(sel.bankFalloff); steepLabel.setText(String.format("Steepness: %.2f", sel.bankFalloff)); }
+        return;
+      }
+      // Ray-vs-AABB picking (ignores terrain); uses current mouse screen coords
+      int sx = Gdx.input.getX();
+      int sy = Gdx.input.getY();
+      var pick = layer.pickNodeRayAABB(EditorContext.getCamera(), sx, sy, 1.0f, 0.4f, 0.8f);
+      if (pick != null) {
+        layer.select(pick.spline, pick.nodeIndex); dragging = true;
+        // Sync sliders to picked spline
+        TerrainSpline ssel = layer.getSelectedSpline();
+        if (ssel != null && ssel.getType() == TerrainSpline.Type.RIVER) {
+          if (widthSlider != null) { widthSlider.setValue(ssel.width); widthLabel.setText(String.format("Width: %.1f m", ssel.width)); }
+          if (depthSlider != null) { depthSlider.setValue(ssel.riverDepth); depthLabel.setText(String.format("Depth: %.1f m", ssel.riverDepth)); }
+          if (steepSlider != null) { steepSlider.setValue(ssel.bankFalloff); steepLabel.setText(String.format("Steepness: %.2f", ssel.bankFalloff)); }
+        }
+      }
+      else { layer.clearSelection(); dragging = false; }
+    } else if (button == com.badlogic.gdx.Input.Buttons.RIGHT) {
+      active = null; dragging = false;
+    }
+  }
+
+  @Override public void onPointerDrag(Vector3 world, int button, boolean shift, boolean ctrl) {
+    if (!dragging) return;
+    TerrainSpline sel = layer.getSelectedSpline();
+    int idx = layer.getSelectedNode();
+    if (sel == null || idx < 0) return;
+    // Recompute world point by intersecting camera ray with BASE heightmap, not current terrain
+    var cam = EditorContext.getCamera();
+    int sx = Gdx.input.getX();
+    int sy = Gdx.input.getY();
+    com.badlogic.gdx.math.collision.Ray ray = cam.getPickRay(sx, sy);
+    Vector3 hit = terrain.getPicker().rayIntersectTerrain(ray, terrain.getBaseHeightSampler(), 1f, 8);
+    if (hit != null) {
+      sel.setNodePos(idx, new Vector3(hit.x, hit.y + 0.05f, hit.z));
+    } else {
+      // Fallback: use provided world XZ with base height
+      float baseY = terrain.getBaseHeightSampler().heightAt(world.x, world.z, world.y);
+      sel.setNodePos(idx, new Vector3(world.x, baseY + 0.05f, world.z));
+    }
+  }
+
+  @Override public void onPointerUp(Vector3 world, int button, boolean shift, boolean ctrl) { dragging = false; }
+
+  @Override public void render3D(Camera cam) {
+    // Draw all river splines as blue-ish polylines; highlight selected; draw node hitboxes
+    Gdx.gl.glEnable(GL20.GL_BLEND);
+    Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
+    for (TerrainSpline s : layer.getSplines()) {
+      if (s.getType() != TerrainSpline.Type.RIVER) continue;
+      if (s.isRibbonDirty() && !s.isRibbonRebuilding()) s.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 8);
+      if (!s.hasRibbon()) continue;
+      boolean sel = (s == layer.getSelectedSpline());
+      float rr = 0.1f, gg = 0.6f, bb = 1.0f; // blue tint
+      float aa = 0.5f;
+      boolean atop = Boolean.TRUE.equals(CVars.BRUSH_ALWAYS_ON_TOP.get());
+      if (atop) { Gdx.gl.glDisable(GL20.GL_DEPTH_TEST); Gdx.gl.glDepthMask(false); }
+      Gdx.gl.glDisable(GL20.GL_CULL_FACE);
+
+      float[] lx = s.getLX(), ly = s.getLY(), lz = s.getLZ();
+      float[] rx = s.getRX(), ry = s.getRY(), rz = s.getRZ();
+      int n = s.getTriPairs() + 1;
+      float yLift = 0.02f;
+
+      // Draw in batches of segments to stay well within internal buffers
+      int i = 0;
+      final int maxSegmentsPerBatch = 2500; // 2500 * 6 = 15000 verts
+      while (i < n - 1) {
+        int end = Math.min(n - 1, i + maxSegmentsPerBatch);
+        im.begin(cam.combined, GL20.GL_TRIANGLES);
+        for (int k = i; k < end; k++) {
+          im.color(rr,gg,bb,aa); im.vertex(lx[k],   ly[k]  +yLift, lz[k]);
+          im.color(rr,gg,bb,aa); im.vertex(rx[k],   ry[k]  +yLift, rz[k]);
+          im.color(rr,gg,bb,aa); im.vertex(lx[k+1], ly[k+1]+yLift, lz[k+1]);
+          im.color(rr,gg,bb,aa); im.vertex(rx[k],   ry[k]  +yLift, rz[k]);
+          im.color(rr,gg,bb,aa); im.vertex(rx[k+1], ry[k+1]+yLift, rz[k+1]);
+          im.color(rr,gg,bb,aa); im.vertex(lx[k+1], ly[k+1]+yLift, lz[k+1]);
+        }
+        im.end();
+        i = end;
+      }
+
+      if (atop) { Gdx.gl.glDepthMask(true); Gdx.gl.glEnable(GL20.GL_DEPTH_TEST); }
+      Gdx.gl.glEnable(GL20.GL_CULL_FACE);
+
+      // Centerline poly for guidance (midpoints)
+      float r = 0.1f, g = sel ? 0.8f : 0.6f, b = 1.0f;
+      float a = sel ? 1f : 0.85f;
+      im.begin(cam.combined, GL20.GL_LINES);
+      for (int j = 0; j < n - 1; j++) {
+        float ax = 0.5f * (lx[j] + rx[j]);
+        float ay = 0.5f * (ly[j] + ry[j]) + 0.05f;
+        float az = 0.5f * (lz[j] + rz[j]);
+        float bx = 0.5f * (lx[j+1] + rx[j+1]);
+        float by = 0.5f * (ly[j+1] + ry[j+1]) + 0.05f;
+        float bz = 0.5f * (lz[j+1] + rz[j+1]);
+        im.color(r, g, b, a); im.vertex(ax, ay, az);
+        im.color(r, g, b, a); im.vertex(bx, by, bz);
+      }
+      im.end();
+
+      // node hitboxes (3D wire boxes centered at baseline height)
+      List<com.example.game.World.Splines.TerrainSplineNode> nodes = s.getNodes();
+      for (int k=0;k<nodes.size();k++){
+        Vector3 p = nodes.get(k).pos;
+        float baseY = terrain.getBaseHeightSampler().heightAt(p.x, p.z, p.y);
+        float halfX = 0.6f, halfZ = 0.6f;
+        float halfYAbove = 0.6f, halfYBelow = 0.2f; // extend more above baseline
+        float y0 = baseY - halfYBelow;
+        float y1 = baseY + halfYAbove;
+        float x0 = p.x - halfX, x1 = p.x + halfX;
+        float z0 = p.z - halfZ, z1 = p.z + halfZ;
+
+        float cr= 0.1f, cg= 0.8f, cb= 1.0f; float ca= 1f;
+        if (sel && k==layer.getSelectedNode()) { cg=1f; }
+        im.begin(cam.combined, GL20.GL_LINES);
+        // bottom rectangle
+        im.color(cr,cg,cb,ca); im.vertex(x0, y0, z0); im.color(cr,cg,cb,ca); im.vertex(x1, y0, z0);
+        im.color(cr,cg,cb,ca); im.vertex(x1, y0, z0); im.color(cr,cg,cb,ca); im.vertex(x1, y0, z1);
+        im.color(cr,cg,cb,ca); im.vertex(x1, y0, z1); im.color(cr,cg,cb,ca); im.vertex(x0, y0, z1);
+        im.color(cr,cg,cb,ca); im.vertex(x0, y0, z1); im.color(cr,cg,cb,ca); im.vertex(x0, y0, z0);
+        // top rectangle
+        im.color(cr,cg,cb,ca); im.vertex(x0, y1, z0); im.color(cr,cg,cb,ca); im.vertex(x1, y1, z0);
+        im.color(cr,cg,cb,ca); im.vertex(x1, y1, z0); im.color(cr,cg,cb,ca); im.vertex(x1, y1, z1);
+        im.color(cr,cg,cb,ca); im.vertex(x1, y1, z1); im.color(cr,cg,cb,ca); im.vertex(x0, y1, z1);
+        im.color(cr,cg,cb,ca); im.vertex(x0, y1, z1); im.color(cr,cg,cb,ca); im.vertex(x0, y1, z0);
+        // vertical edges
+        im.color(cr,cg,cb,ca); im.vertex(x0, y0, z0); im.color(cr,cg,cb,ca); im.vertex(x0, y1, z0);
+        im.color(cr,cg,cb,ca); im.vertex(x1, y0, z0); im.color(cr,cg,cb,ca); im.vertex(x1, y1, z0);
+        im.color(cr,cg,cb,ca); im.vertex(x1, y0, z1); im.color(cr,cg,cb,ca); im.vertex(x1, y1, z1);
+        im.color(cr,cg,cb,ca); im.vertex(x0, y0, z1); im.color(cr,cg,cb,ca); im.vertex(x0, y1, z1);
+        im.end();
+      }
+    }
+    Gdx.gl.glDisable(GL20.GL_BLEND);
+  }
+
+  private com.badlogic.gdx.utils.Array<String> buildNodeLabels(TerrainSpline s) {
+    com.badlogic.gdx.utils.Array<String> arr = new com.badlogic.gdx.utils.Array<>();
+    for (int i=0;i<s.size();i++) {
+      var n = s.getNodes().get(i);
+      arr.add(String.format("%02d: (%.1f, %.1f, %.1f)", i, n.pos.x, n.pos.y, n.pos.z));
+    }
+    return arr;
+  }
+}

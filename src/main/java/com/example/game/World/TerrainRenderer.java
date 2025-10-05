@@ -20,6 +20,8 @@ final class TerrainRenderer {
 
   void render(SimpleShader shader, Camera cam) {
     shader.bind();
+    // Apply current non-destructive height modifier to mesh builders/samplers
+    TerrainChunk.setGlobalModifier(w.heightModifier);
 
     // Build view with zero translation (don't mutate cam.view directly)
     com.badlogic.gdx.math.Matrix4 viewNoTrans = new com.badlogic.gdx.math.Matrix4(cam.view);

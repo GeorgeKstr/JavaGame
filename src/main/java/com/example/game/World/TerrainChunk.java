@@ -13,6 +13,9 @@ import java.util.Arrays;
  *   a_position(3), a_normal(3), a_texCoord0(2), a_texIds(3), a_texW(3) => 14 floats/vertex
  */
 public class TerrainChunk {
+  // Optional global non-destructive height modifier applied during mesh builds and sampling
+  private static volatile HeightModifier MOD = null;
+  public static void setGlobalModifier(HeightModifier m) { MOD = m; }
 
   // --- immutable chunk params ---
   private final int S;            // samples per side (e.g., 65)
@@ -38,6 +41,9 @@ public class TerrainChunk {
   private int builtMaxLod = -1;
 
   private boolean dirty;          // CPU data changed → rebuild LODs
+
+  // Baseline copy of heights for baking reset (null until first bake uses it)
+  private short[] baselineHeights;
 
   // ---- ctors ----
 
@@ -106,6 +112,22 @@ public class TerrainChunk {
     this.dirty = true;
   }
 
+  /** Ensure a baseline copy exists; if not, capture current heights as baseline. */
+  public void ensureBaseline() {
+    if (baselineHeights == null) baselineHeights = Arrays.copyOf(heights, heights.length);
+  }
+
+  /** Replace the entire heights array with the baseline copy if present. */
+  public void restoreAllFromBaseline() {
+    if (baselineHeights != null) {
+      System.arraycopy(baselineHeights, 0, heights, 0, heights.length);
+      dirty = true;
+    }
+  }
+
+  /** Access raw arrays for editor reset operations. */
+  public short[] getBaselineArray() { return baselineHeights; }
+
   public void setTexIds(byte[] ids) {
     if (ids == null || ids.length != S * S) throw new IllegalArgumentException("texIds length mismatch");
     this.texIds = Arrays.copyOf(ids, ids.length);
@@ -152,8 +174,9 @@ public class TerrainChunk {
     for (int z = 0; z < S; z++) {
       for (int x = 0; x < S; x++) {
         float px = originX + x * tile;
-        float py = heights[z * S + x] * yScale;
         float pz = originZ + z * tile;
+        float py = heights[z * S + x] * yScale;
+        if (MOD != null) py += MOD.deltaAt(px, pz);
 
         verts[v++] = px; verts[v++] = py; verts[v++] = pz;
         verts[v++] = 0f; verts[v++] = 1f; verts[v++] = 0f;
@@ -381,7 +404,9 @@ public class TerrainChunk {
 
     float hx0 = h00 + (h10 - h00) * tx;
     float hx1 = h01 + (h11 - h01) * tx;
-    return hx0 + (hx1 - hx0) * tz;
+    float h = hx0 + (hx1 - hx0) * tz;
+    if (MOD != null) h += MOD.deltaAt(x, z);
+    return h;
   }
 
   // ---- Render ----

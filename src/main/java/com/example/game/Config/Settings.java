@@ -6,7 +6,7 @@ public class Settings {
   public float mouseSensitivity = 0.3f;     // orbit speed
   public float panSpeedFactor  = 0.0025f;   // world units per px * distance
   public int   brushMaxRadius  = 64;        // clamp
-  public boolean brushAlwaysOnTop = true;   // draw over terrain
+  public boolean brushAlwaysOnTop = false;   // draw over terrain
   public float editorMoveSpeed = 1000f;     // units per second
 
   // --- Terrain / streaming ---

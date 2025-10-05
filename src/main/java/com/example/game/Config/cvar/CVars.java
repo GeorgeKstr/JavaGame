@@ -9,7 +9,7 @@ public final class CVars {
   public static final CVar<Float>   EDITOR_MOUSE_SENS    = reg.defineFloat("editor.mouseSensitivity", 0.3f);
   public static final CVar<Float>   EDITOR_PAN_SPEED     = reg.defineFloat("editor.panSpeedFactor", 0.0025f);
   public static final CVar<Integer> BRUSH_MAX_RADIUS     = reg.defineInt("editor.brushMaxRadius", 64);
-  public static final CVar<Boolean> BRUSH_ALWAYS_ON_TOP  = reg.defineBool("editor.brushAlwaysOnTop", true);
+  public static final CVar<Boolean> BRUSH_ALWAYS_ON_TOP  = reg.defineBool("editor.brushAlwaysOnTop", false);
   public static final CVar<Float>   EDITOR_MOVE_SPEED    = reg.defineFloat("editor.editorMoveSpeed", 1000f);
   // Brush params (shared across brush tools)
   public static final CVar<Float>   BRUSH_RADIUS         = reg.defineFloat("editor.brush.radius", 6f);

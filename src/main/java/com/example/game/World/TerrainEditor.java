@@ -46,6 +46,84 @@ public class TerrainEditor {
     return true;
   }
 
+  /** Restore heights from each chunk's baseline in a circular region (idempotent baking). */
+  public boolean restoreFromBaselineCircle(int gx, int gz, int radius) {
+    if (radius <= 0) return false;
+    boolean changed=false; Index p=new Index(); Index[] ns={new Index(),new Index(),new Index(),new Index(),new Index(),new Index(),new Index(),new Index()};
+    final int S = w.S;
+    for (int dz=-radius; dz<=radius; dz++) for (int dx=-radius; dx<=radius; dx++) {
+      if (dx*dx+dz*dz>radius*radius) continue;
+      int gxi=gx+dx, gzi=gz+dz;
+      if (!primaryIndex(gxi,gzi,p)) continue;
+      TerrainChunk tc=get(p.cx,p.cz); if (tc==null) continue;
+      short[] base=tc.getBaselineArray(); if (base==null) continue; // nothing to restore from
+      short[] arr=tc.getHeightsArray(); int idx=p.lz*S+p.lx; short b=arr[idx], a=base[idx];
+      if (a!=b){ arr[idx]=a; tc.setDirty(true); changed=true; }
+      int ncount=neighborsForSample(p,ns);
+      for(int i=0;i<ncount;i++){ TerrainChunk nb=get(ns[i].cx,ns[i].cz); if(nb==null)continue;
+        short[] bArr=nb.getBaselineArray(); if (bArr==null) continue;
+        short[] harr=nb.getHeightsArray(); int nidx=ns[i].lz*S+ns[i].lx; short bb=harr[nidx], aa=bArr[nidx];
+        if(aa!=bb){ harr[nidx]=aa; nb.setDirty(true); }
+      }
+    }
+    return changed;
+  }
+
+  /**
+   * Lower terrain toward baseline by a max depth with a radial edge profile (steepness). Overlapping
+   * stamps will not deepen further than the per-cell target (min(current, target)). Uses chunk baselines
+   * when available; otherwise falls back to current heights as the baseline.
+   *
+   * @param gx global grid X center
+   * @param gz global grid Z center
+   * @param radius circle radius in cells
+   * @param maxDepthMeters maximum lowering at the center in meters
+   * @param steepness 0..1, higher means sharper drop (shallower near edges)
+   */
+  public boolean applyRiverDepthCircleProfiledClamped(int gx, int gz, int radius, float maxDepthMeters, float steepness) {
+    if (radius <= 0 || maxDepthMeters <= 0f) return false;
+    boolean changed = false; Index p = new Index(); Index[] ns = {new Index(),new Index(),new Index(),new Index(),new Index(),new Index(),new Index(),new Index()};
+    final int S = w.S;
+    final float yScale = w.yScale;
+    final float r2 = (float)radius * radius;
+    // Map steepness [0..1] to exponent k in depth profile f = (1 - r)^k
+    final float k = 1.0f + 4.0f * clamp01(steepness);
+
+    for (int dz = -radius; dz <= radius; dz++) {
+      for (int dx = -radius; dx <= radius; dx++) {
+        float d2 = (float)dx * dx + (float)dz * dz;
+        if (d2 > r2) continue;
+        int gxi = gx + dx, gzi = gz + dz;
+        if (!primaryIndex(gxi, gzi, p)) continue;
+        TerrainChunk tc = get(p.cx, p.cz); if (tc == null) continue;
+        short[] arr = tc.getHeightsArray();
+        short[] baseArr = tc.getBaselineArray();
+        int idx = p.lz * S + p.lx;
+        short base = baseArr != null ? baseArr[idx] : arr[idx];
+
+        // radial factor 0 at edge, 1 at center
+        float rNorm = (float)Math.sqrt(d2) / (float)radius;
+        float f = (float)Math.pow(Math.max(0f, 1f - rNorm), k);
+        float targetMeters = base * yScale - maxDepthMeters * f;
+        short targetShort = (short)Math.round(targetMeters / yScale);
+
+        short cur = arr[idx];
+        short next = (short)Math.min(cur, targetShort);
+        if (next != cur) {
+          arr[idx] = next; tc.setDirty(true); changed = true;
+          // Mirror to shared edges to avoid cracks
+          int ncount = neighborsForSample(p, ns);
+          for (int i = 0; i < ncount; i++) {
+            TerrainChunk nb = get(ns[i].cx, ns[i].cz); if (nb == null) continue;
+            short[] harr = nb.getHeightsArray(); int nidx = ns[i].lz * S + ns[i].lx;
+            if (harr[nidx] != next) { harr[nidx] = next; nb.setDirty(true); }
+          }
+        }
+      }
+    }
+    return changed;
+  }
+
   private int neighborsForSample(Index p, Index[] o) {
     int S = w.S; int c=0;
     if (p.lx==S-1) o[c++].set(p.cx+1,p.cz,0,p.lz);

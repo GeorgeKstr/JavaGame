@@ -31,6 +31,9 @@ final class TerrainWorld {
   TextureArray groundTA;
   final float[] uvScales = new float[256];
 
+  // Optional non-destructive height modifier (e.g., rivers). Read by renderer/builders.
+  volatile HeightModifier heightModifier;
+
   // LOD
   int MAX_LOD = 0;
   float[] lodDistances = new float[]{ 50f, 130f, 260f, 520f };
