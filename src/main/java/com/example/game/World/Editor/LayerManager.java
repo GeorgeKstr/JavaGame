@@ -61,6 +61,11 @@ public final class LayerManager {
   public void render3D(Camera cam) {
     if (active != null) {
       active.render3D(cam);
+      // When Terrain tools are active, also render spline overlays for context
+      if ("terrain".equals(active.id())) {
+        EditorLayer spl = byId.get("splines");
+        if (spl != null) spl.render3D(cam);
+      }
     }
   }
 }

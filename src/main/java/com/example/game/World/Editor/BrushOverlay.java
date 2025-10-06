@@ -47,20 +47,21 @@ public final class BrushOverlay {
     int sy = Gdx.input.getY();
     Ray ray = ((PerspectiveCamera) cam).getPickRay(sx, sy);
 
-    // Intersect against the terrain heightfield
-    Vector3 hit = terrain.getPicker().rayIntersectTerrain(ray, terrain, 0.25f, 8);
+    // Intersect against the terrain heightfield using fast plane+sample on BASE heights
+    Vector3 hit = terrain.getPicker().rayIntersectTerrainFastPlane(ray, terrain.getBaseHeightSampler());
     hasHit = (hit != null);
     if (!hasHit) return;
 
     center.set(hit.x, hit.y + 0.02f, hit.z);
     radiusWorld = Math.max(1, brushRadiusTiles) * tileSize;
 
-    // Build ring by re-sampling height along the circle in XZ
+    // Build ring by re-sampling BASE height along the circle in XZ
+    HeightSampler base = terrain.getBaseHeightSampler();
     for (int i = 0; i < segments; i++) {
       float a = (float)(i * Math.PI * 2.0 / segments);
       float x = center.x + radiusWorld * (float)Math.cos(a);
       float z = center.z + radiusWorld * (float)Math.sin(a);
-      float y = sampler.heightAt(x, z, center.y);
+      float y = base.heightAt(x, z, center.y);
       if (Float.isNaN(y)) y = center.y; // guard against unloaded cells
       rx[i] = x; ry[i] = y + 0.02f; rz[i] = z;
     }
@@ -71,7 +72,7 @@ public final class BrushOverlay {
       float a = (float)(i * Math.PI * 2.0 / segments);
       float x = center.x + radiusFallOff * (float)Math.cos(a);
       float z = center.z + radiusFallOff * (float)Math.sin(a);
-      float y = sampler.heightAt(x, z, center.y);
+      float y = base.heightAt(x, z, center.y);
       if (Float.isNaN(y)) y = center.y; // guard against unloaded cells
       frx[i] = x; fry[i] = y + 0.02f; frz[i] = z;
     }
