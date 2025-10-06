@@ -36,7 +36,7 @@ public class TerrainSpline {
   private int triPairs = 0; // number of quad segments (n-1)
   private volatile long lastRibbonRebuildMs = 0L;
 
-  public void markRibbonDirty() { ribbonDirty = true; lx = ly = lz = rx = ry = rz = null; triPairs = 0; }
+  public void markRibbonDirty() { ribbonDirty = true; /* preserve existing arrays so rendering continues until rebuild publishes */ }
   public boolean isRibbonDirty() { return ribbonDirty; }
   public boolean isRibbonRebuilding() { return ribbonRebuilding; }
 

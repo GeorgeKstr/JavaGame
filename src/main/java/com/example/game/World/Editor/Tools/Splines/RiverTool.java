@@ -73,7 +73,7 @@ public final class RiverTool implements Tool {
     widthSlider = new Slider(1f, 50f, 0.5f, false, skin);
     if (sel != null) widthSlider.setValue(sel.width);
     widthSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
-      TerrainSpline s = layer.getSelectedSpline(); if (s==null) return; s.width = widthSlider.getValue(); s.markRibbonDirty(); widthLabel.setText(String.format("Width: %.1f m", s.width)); }});
+      TerrainSpline s = layer.getSelectedSpline(); if (s==null) return; s.width = widthSlider.getValue(); s.markRibbonDirty(); s.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 8); widthLabel.setText(String.format("Width: %.1f m", s.width)); }});
     wtbl.add(widthLabel).left().row();
     wtbl.add(widthSlider).width(240).row();
     container.add(wtbl).left().padBottom(8).row();
@@ -83,7 +83,7 @@ public final class RiverTool implements Tool {
     depthSlider = new Slider(0.1f, 20f, 0.1f, false, skin);
     if (sel != null) depthSlider.setValue(sel.riverDepth);
     depthSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
-      TerrainSpline s = layer.getSelectedSpline(); if (s==null || s.getType()!=TerrainSpline.Type.RIVER) return; s.riverDepth = depthSlider.getValue(); s.markRibbonDirty(); depthLabel.setText(String.format("Depth: %.1f m", s.riverDepth)); }});
+      TerrainSpline s = layer.getSelectedSpline(); if (s==null || s.getType()!=TerrainSpline.Type.RIVER) return; s.riverDepth = depthSlider.getValue(); s.markRibbonDirty(); s.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 8); depthLabel.setText(String.format("Depth: %.1f m", s.riverDepth)); }});
     dt.add(depthLabel).left().row();
     dt.add(depthSlider).width(240).row();
     container.add(dt).left().padBottom(8).row();
@@ -94,7 +94,7 @@ public final class RiverTool implements Tool {
     steepSlider = new Slider(0f, 1f, 0.01f, false, skin);
     if (sel != null) steepSlider.setValue(sel.bankFalloff);
     steepSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
-      TerrainSpline s = layer.getSelectedSpline(); if (s==null || s.getType()!=TerrainSpline.Type.RIVER) return; s.bankFalloff = steepSlider.getValue(); s.markRibbonDirty(); steepLabel.setText(String.format("Steepness: %.2f", s.bankFalloff)); }});
+      TerrainSpline s = layer.getSelectedSpline(); if (s==null || s.getType()!=TerrainSpline.Type.RIVER) return; s.bankFalloff = steepSlider.getValue(); s.markRibbonDirty(); s.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 8); steepLabel.setText(String.format("Steepness: %.2f", s.bankFalloff)); }});
     st.add(steepLabel).left().row();
     st.add(steepSlider).width(240).row();
     container.add(st).left().padBottom(8).row();
@@ -147,8 +147,8 @@ public final class RiverTool implements Tool {
     bake.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
       // Sample density: 8 per segment by default for decent coverage
       terrain.bakeRiversDepth(layer.getSplines(), 8);
-      // After baking, invalidate all ribbons so they resample heights from base
-      for (TerrainSpline s : layer.getSplines()) s.markRibbonDirty();
+      // After baking, rebuild all ribbons explicitly (event-driven)
+      for (TerrainSpline s : layer.getSplines()) { s.markRibbonDirty(); s.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 8); }
     }});
     container.add(bake).left().padTop(8).row();
   }
@@ -166,6 +166,8 @@ public final class RiverTool implements Tool {
           if (spline == null) spline = layer.createSpline(TerrainSpline.Type.RIVER);
           spline.addNode(new TerrainSplineNode(world.x, y, world.z));
           layer.select(spline, spline.size()-1);
+          spline.markRibbonDirty();
+          spline.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 8);
           if (nodeList != null) nodeList.setItems(buildNodeLabels(spline)); nodeList.setSelectedIndex(spline.size()-1);
           if (widthSlider != null) { widthSlider.setValue(spline.width); widthLabel.setText(String.format("Width: %.1f m", spline.width)); }
           if (depthSlider != null) { depthSlider.setValue(spline.riverDepth); depthLabel.setText(String.format("Depth: %.1f m", spline.riverDepth)); }
@@ -206,6 +208,8 @@ public final class RiverTool implements Tool {
         insertAt = Math.max(0, Math.min(insertAt, spline.size()));
         spline.insertNode(insertAt, new TerrainSplineNode(world.x, y, world.z));
         layer.select(spline, insertAt);
+        spline.markRibbonDirty();
+        spline.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 8);
         if (nodeList != null) nodeList.setItems(buildNodeLabels(spline)); nodeList.setSelectedIndex(insertAt);
         if (widthSlider != null) { widthSlider.setValue(spline.width); widthLabel.setText(String.format("Width: %.1f m", spline.width)); }
         if (depthSlider != null) { depthSlider.setValue(spline.riverDepth); depthLabel.setText(String.format("Depth: %.1f m", spline.riverDepth)); }
@@ -227,29 +231,56 @@ public final class RiverTool implements Tool {
           if (steepSlider != null) { steepSlider.setValue(ssel.bankFalloff); steepLabel.setText(String.format("Steepness: %.2f", ssel.bankFalloff)); }
         }
       }
-      else { layer.clearSelection(); dragging = false; }
+      else { 
+        layer.clearSelection(); 
+        dragging = false; 
+        if (nodeList != null) nodeList.clearItems();
+      }
     } else if (button == com.badlogic.gdx.Input.Buttons.RIGHT) {
       active = null; dragging = false;
     }
   }
 
   @Override public void onPointerDrag(Vector3 world, int button, boolean shift, boolean ctrl) {
+    // Do nothing here; dragging is handled in update() for performance
+    return;
+  }
+
+  @Override public void update(float dt, Camera cam) {
     if (!dragging) return;
     TerrainSpline sel = layer.getSelectedSpline();
     int idx = layer.getSelectedNode();
-    if (sel == null || idx < 0) return;
-    // Recompute world point by intersecting camera ray with BASE heightmap, not current terrain
-    var cam = EditorContext.getCamera();
+    if (sel == null || idx < 0 || cam == null) return;
     int sx = Gdx.input.getX();
     int sy = Gdx.input.getY();
     com.badlogic.gdx.math.collision.Ray ray = cam.getPickRay(sx, sy);
-    Vector3 hit = terrain.getPicker().rayIntersectTerrain(ray, terrain.getBaseHeightSampler(), 1f, 8);
-    if (hit != null) sel.setNodePos(idx, new Vector3(hit.x, hit.y + 0.05f, hit.z));
-    else { float baseY = terrain.getBaseHeightSampler().heightAt(world.x, world.z, world.y); sel.setNodePos(idx, new Vector3(world.x, baseY + 0.05f, world.z)); }
-    if (nodeList != null) nodeList.setItems(buildNodeLabels(sel)); nodeList.setSelectedIndex(idx);
+    // Intersect with y=0 plane to get XZ quickly; then sample base height once
+    float denom = ray.direction.y;
+    Vector3 pos;
+    if (Math.abs(denom) > 1e-6f) {
+      float t = (0f - ray.origin.y) / denom;
+      pos = new Vector3(ray.origin).mulAdd(ray.direction, t);
+    } else {
+      Vector3 cur = sel.getNodes().get(idx).pos;
+      pos = new Vector3(cur.x, 0f, cur.z);
+    }
+    float h = terrain.getBaseHeightSampler().heightAt(pos.x, pos.z, Float.NaN);
+    sel.setNodePos(idx, new Vector3(pos.x, h + 0.05f, pos.z));
+    // Throttled by TerrainSpline.rebuildRibbonAsync internal timer
+    sel.markRibbonDirty();
+    sel.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 8);
   }
 
-  @Override public void onPointerUp(Vector3 world, int button, boolean shift, boolean ctrl) { dragging = false; }
+  @Override public void onPointerUp(Vector3 world, int button, boolean shift, boolean ctrl) {
+    if (dragging) {
+      TerrainSpline sel = layer.getSelectedSpline();
+      if (sel != null && sel.getType() == TerrainSpline.Type.RIVER) {
+        sel.markRibbonDirty();
+        sel.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 8);
+      }
+    }
+    dragging = false;
+  }
 
   @Override public void render3D(Camera cam) {
     // Draw all river splines as blue-ish polylines; highlight selected; draw node hitboxes
@@ -257,11 +288,12 @@ public final class RiverTool implements Tool {
     Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
     for (TerrainSpline s : layer.getSplines()) {
       if (s.getType() != TerrainSpline.Type.RIVER) continue;
-      if (s.isRibbonDirty() && !s.isRibbonRebuilding()) s.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 8);
       if (!s.hasRibbon()) continue;
       boolean sel = (s == layer.getSelectedSpline());
-      float rr = 0.1f, gg = 0.6f, bb = 1.0f; // blue tint
-      float aa = 0.5f;
+      // Deeper blue and less transparent when selected; more transparent when not selected
+      float rr, gg, bb, aa;
+      if (sel) { rr = 0.05f; gg = 0.35f; bb = 1.0f; aa = 0.8f; }
+      else { rr = 0.1f; gg = 0.6f; bb = 1.0f; aa = 0.25f; }
       boolean atop = Boolean.TRUE.equals(CVars.BRUSH_ALWAYS_ON_TOP.get());
       if (atop) { Gdx.gl.glDisable(GL20.GL_DEPTH_TEST); Gdx.gl.glDepthMask(false); }
       Gdx.gl.glDisable(GL20.GL_CULL_FACE);
@@ -293,8 +325,8 @@ public final class RiverTool implements Tool {
       Gdx.gl.glEnable(GL20.GL_CULL_FACE);
 
       // Centerline poly for guidance (midpoints)
-      float r = 0.1f, g = sel ? 0.8f : 0.6f, b = 1.0f;
-      float a = sel ? 1f : 0.85f;
+      float r = 0.08f, g = sel ? 0.5f : 0.5f, b = 1.0f;
+      float a = sel ? 1f : 0.5f;
       im.begin(cam.combined, GL20.GL_LINES);
       for (int j = 0; j < n - 1; j++) {
         float ax = 0.5f * (lx[j] + rx[j]);
@@ -308,12 +340,13 @@ public final class RiverTool implements Tool {
       }
       im.end();
 
-      // node hitboxes (3D wire boxes centered at baseline height)
+      // node hitboxes (3D wire boxes centered at node's stored height); batch drawing
       List<com.example.game.World.Splines.TerrainSplineNode> nodes = s.getNodes();
+      im.begin(cam.combined, GL20.GL_LINES);
       for (int k=0;k<nodes.size();k++){
         Vector3 p = nodes.get(k).pos;
-        float baseY = terrain.getBaseHeightSampler().heightAt(p.x, p.z, p.y);
-        float halfX = 0.6f, halfZ = 0.6f;
+        float baseY = p.y - 0.05f; // nodes are kept at base + 0.05f during edits
+        float halfX = 1.0f, halfZ = 1.0f;
         float halfYAbove = 0.6f, halfYBelow = 0.2f; // extend more above baseline
         float y0 = baseY - halfYBelow;
         float y1 = baseY + halfYAbove;
@@ -321,8 +354,7 @@ public final class RiverTool implements Tool {
         float z0 = p.z - halfZ, z1 = p.z + halfZ;
 
         float cr= 0.1f, cg= 0.8f, cb= 1.0f; float ca= 1f;
-        if (sel && k==layer.getSelectedNode()) { cg=1f; }
-        im.begin(cam.combined, GL20.GL_LINES);
+        if (sel && k==layer.getSelectedNode()) { cr=1.0f; cg=0.4f; cb=0.4f; }
         // bottom rectangle
         im.color(cr,cg,cb,ca); im.vertex(x0, y0, z0); im.color(cr,cg,cb,ca); im.vertex(x1, y0, z0);
         im.color(cr,cg,cb,ca); im.vertex(x1, y0, z0); im.color(cr,cg,cb,ca); im.vertex(x1, y0, z1);
@@ -338,8 +370,8 @@ public final class RiverTool implements Tool {
         im.color(cr,cg,cb,ca); im.vertex(x1, y0, z0); im.color(cr,cg,cb,ca); im.vertex(x1, y1, z0);
         im.color(cr,cg,cb,ca); im.vertex(x1, y0, z1); im.color(cr,cg,cb,ca); im.vertex(x1, y1, z1);
         im.color(cr,cg,cb,ca); im.vertex(x0, y0, z1); im.color(cr,cg,cb,ca); im.vertex(x0, y1, z1);
-        im.end();
       }
+      im.end();
     }
     Gdx.gl.glDisable(GL20.GL_BLEND);
   }
