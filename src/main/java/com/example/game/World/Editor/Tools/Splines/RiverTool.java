@@ -32,9 +32,28 @@ public final class RiverTool implements Tool {
   private Slider depthSlider; private Label depthLabel;
   private Slider steepSlider; private Label steepLabel;
   private TerrainSpline lastBoundForUI;
+  private com.badlogic.gdx.scenes.scene2d.ui.List<String> nodeList;
 
   public RiverTool(SplinesLayer layer, TerrainSystem terrain) {
     this.layer = layer; this.terrain = terrain;
+  }
+
+  // ----- helpers -----
+  private static float projParamOnSegXZ(Vector3 a, Vector3 b, float px, float pz) {
+    float vx = b.x - a.x, vz = b.z - a.z;
+    float wx = px - a.x, wz = pz - a.z;
+    float denom = vx*vx + vz*vz;
+    if (denom <= 1e-6f) return 0f;
+    return (vx*wx + vz*wz) / denom; // un-clamped t
+  }
+
+  private static float dist2ToSegXZ(Vector3 a, Vector3 b, float px, float pz) {
+    float t = projParamOnSegXZ(a, b, px, pz);
+    if (t < 0f) t = 0f; else if (t > 1f) t = 1f;
+    float sx = a.x + (b.x - a.x) * t;
+    float sz = a.z + (b.z - a.z) * t;
+    float dx = px - sx, dz = pz - sz;
+    return dx*dx + dz*dz;
   }
 
   @Override public String name() { return "River"; }
@@ -101,29 +120,27 @@ public final class RiverTool implements Tool {
     t.add(imp).width(100);
     container.add(t).left().row();
 
-    // Nodes list for the selected spline
-    if (sel != null) {
-      container.add(new Label("Nodes:", skin, "title")).left().padTop(8).row();
-      Table lt = new Table();
-      final com.badlogic.gdx.scenes.scene2d.ui.List<String> nodeList = new com.badlogic.gdx.scenes.scene2d.ui.List<>(skin);
-      nodeList.setItems(buildNodeLabels(sel));
-      nodeList.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
-        TerrainSpline cur = layer.getSelectedSpline();
-        if (cur == null || cur.getType()!=TerrainSpline.Type.RIVER) return;
-        int idx = nodeList.getSelectedIndex(); if (idx >= 0 && idx < cur.size()) layer.select(cur, idx);
-      }});
-      ScrollPane sp = new ScrollPane(nodeList, skin);
-      sp.setFadeScrollBars(false);
-      lt.add(sp).width(260).height(120).row();
-      TextButton del = new TextButton("Delete Selected Node", skin);
-      del.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
-        TerrainSpline cur = layer.getSelectedSpline();
-        if (cur == null || cur.getType()!=TerrainSpline.Type.RIVER) return;
-        int idx = nodeList.getSelectedIndex(); if (idx>=0 && idx < cur.size()) { cur.removeNode(idx); layer.select(cur, Math.min(idx, cur.size()-1)); nodeList.setItems(buildNodeLabels(cur)); }
-      }});
-      lt.add(del).left().padTop(6);
-      container.add(lt).left().row();
-    }
+    // Nodes list (always visible; contents depend on selected spline)
+    container.add(new Label("Nodes:", skin, "title")).left().padTop(8).row();
+    Table lt = new Table();
+    nodeList = new com.badlogic.gdx.scenes.scene2d.ui.List<>(skin);
+    nodeList.setItems(buildNodeLabels(sel));
+    nodeList.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+      TerrainSpline cur = layer.getSelectedSpline();
+      if (cur == null || cur.getType()!=TerrainSpline.Type.RIVER) return;
+      int idx = nodeList.getSelectedIndex(); if (idx >= 0 && idx < cur.size()) layer.select(cur, idx);
+    }});
+    ScrollPane sp = new ScrollPane(nodeList, skin);
+    sp.setFadeScrollBars(false);
+    lt.add(sp).width(260).height(120).row();
+    TextButton del = new TextButton("Delete Selected Node", skin);
+    del.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+      TerrainSpline cur = layer.getSelectedSpline();
+      if (cur == null || cur.getType()!=TerrainSpline.Type.RIVER) return;
+      int idx = nodeList.getSelectedIndex(); if (idx>=0 && idx < cur.size()) { cur.removeNode(idx); layer.select(cur, Math.min(idx, cur.size()-1)); nodeList.setItems(buildNodeLabels(cur)); }
+    }});
+    lt.add(del).left().padTop(6);
+    container.add(lt).left().row();
 
     // Bake button
     TextButton bake = new TextButton("Bake River Depth to Terrain", skin);
@@ -141,16 +158,58 @@ public final class RiverTool implements Tool {
   @Override public void onPointerDown(Vector3 world, int button, boolean shift, boolean ctrl) {
     if (button == com.badlogic.gdx.Input.Buttons.LEFT) {
       if (ctrl) {
-        TerrainSpline sel = layer.getSelectedSpline();
-        if (sel == null) sel = layer.createSpline(TerrainSpline.Type.RIVER);
+        TerrainSpline spline = layer.getSelectedSpline();
         float baseY = terrain.getBaseHeightSampler().heightAt(world.x, world.z, world.y);
-        float y = baseY + 0.05f; // slight lift above baseline for visibility/picking
-        sel.addNode(new TerrainSplineNode(world.x, y, world.z));
-        layer.select(sel, sel.size()-1);
-        // Sync sliders to this spline
-        if (widthSlider != null) { widthSlider.setValue(sel.width); widthLabel.setText(String.format("Width: %.1f m", sel.width)); }
-        if (depthSlider != null) { depthSlider.setValue(sel.riverDepth); depthLabel.setText(String.format("Depth: %.1f m", sel.riverDepth)); }
-        if (steepSlider != null) { steepSlider.setValue(sel.bankFalloff); steepLabel.setText(String.format("Steepness: %.2f", sel.bankFalloff)); }
+        float y = baseY + 0.05f;
+        if (spline == null || spline.getType() != TerrainSpline.Type.RIVER || layer.getSelectedNode() < 0) {
+          // No valid selection: create or append to a new spline
+          if (spline == null) spline = layer.createSpline(TerrainSpline.Type.RIVER);
+          spline.addNode(new TerrainSplineNode(world.x, y, world.z));
+          layer.select(spline, spline.size()-1);
+          if (nodeList != null) nodeList.setItems(buildNodeLabels(spline)); nodeList.setSelectedIndex(spline.size()-1);
+          if (widthSlider != null) { widthSlider.setValue(spline.width); widthLabel.setText(String.format("Width: %.1f m", spline.width)); }
+          if (depthSlider != null) { depthSlider.setValue(spline.riverDepth); depthLabel.setText(String.format("Depth: %.1f m", spline.riverDepth)); }
+          if (steepSlider != null) { steepSlider.setValue(spline.bankFalloff); steepLabel.setText(String.format("Steepness: %.2f", spline.bankFalloff)); }
+          return;
+        }
+
+        int n = spline.size();
+        int iSel = layer.getSelectedNode();
+        List<TerrainSplineNode> nodes = spline.getNodes();
+        int insertAt;
+
+        if (n == 1) {
+          // Single node: make this the new second node
+          insertAt = 1;
+        } else if (iSel == 0) {
+          // First node: decide between split [0,1] or prepend
+          Vector3 a = nodes.get(0).pos, b = nodes.get(1).pos;
+          float tRaw = projParamOnSegXZ(a, b, world.x, world.z);
+          if (tRaw < 0f) insertAt = 0; // before first
+          else insertAt = 1;            // split between 0 and 1
+        } else if (iSel == n - 1) {
+          // Last node: decide between append or split [n-2,n-1]
+          Vector3 a = nodes.get(n-2).pos, b = nodes.get(n-1).pos;
+          float tRaw = projParamOnSegXZ(a, b, world.x, world.z);
+          if (tRaw > 1f) insertAt = n; // after last
+          else insertAt = n - 1;       // split between n-2 and n-1 (insert before last)
+        } else {
+          // Middle node: choose nearer adjacent segment
+          Vector3 a0 = nodes.get(iSel-1).pos, b0 = nodes.get(iSel).pos;
+          Vector3 a1 = nodes.get(iSel).pos, b1 = nodes.get(iSel+1).pos;
+          float d0 = dist2ToSegXZ(a0, b0, world.x, world.z);
+          float d1 = dist2ToSegXZ(a1, b1, world.x, world.z);
+          insertAt = (d0 <= d1) ? iSel : iSel + 1;
+        }
+
+        // Clamp and insert
+        insertAt = Math.max(0, Math.min(insertAt, spline.size()));
+        spline.insertNode(insertAt, new TerrainSplineNode(world.x, y, world.z));
+        layer.select(spline, insertAt);
+        if (nodeList != null) nodeList.setItems(buildNodeLabels(spline)); nodeList.setSelectedIndex(insertAt);
+        if (widthSlider != null) { widthSlider.setValue(spline.width); widthLabel.setText(String.format("Width: %.1f m", spline.width)); }
+        if (depthSlider != null) { depthSlider.setValue(spline.riverDepth); depthLabel.setText(String.format("Depth: %.1f m", spline.riverDepth)); }
+        if (steepSlider != null) { steepSlider.setValue(spline.bankFalloff); steepLabel.setText(String.format("Steepness: %.2f", spline.bankFalloff)); }
         return;
       }
       // Ray-vs-AABB picking (ignores terrain); uses current mouse screen coords
@@ -162,6 +221,7 @@ public final class RiverTool implements Tool {
         // Sync sliders to picked spline
         TerrainSpline ssel = layer.getSelectedSpline();
         if (ssel != null && ssel.getType() == TerrainSpline.Type.RIVER) {
+          if (nodeList != null) { nodeList.setItems(buildNodeLabels(ssel)); nodeList.setSelectedIndex(pick.nodeIndex); }
           if (widthSlider != null) { widthSlider.setValue(ssel.width); widthLabel.setText(String.format("Width: %.1f m", ssel.width)); }
           if (depthSlider != null) { depthSlider.setValue(ssel.riverDepth); depthLabel.setText(String.format("Depth: %.1f m", ssel.riverDepth)); }
           if (steepSlider != null) { steepSlider.setValue(ssel.bankFalloff); steepLabel.setText(String.format("Steepness: %.2f", ssel.bankFalloff)); }
@@ -184,13 +244,9 @@ public final class RiverTool implements Tool {
     int sy = Gdx.input.getY();
     com.badlogic.gdx.math.collision.Ray ray = cam.getPickRay(sx, sy);
     Vector3 hit = terrain.getPicker().rayIntersectTerrain(ray, terrain.getBaseHeightSampler(), 1f, 8);
-    if (hit != null) {
-      sel.setNodePos(idx, new Vector3(hit.x, hit.y + 0.05f, hit.z));
-    } else {
-      // Fallback: use provided world XZ with base height
-      float baseY = terrain.getBaseHeightSampler().heightAt(world.x, world.z, world.y);
-      sel.setNodePos(idx, new Vector3(world.x, baseY + 0.05f, world.z));
-    }
+    if (hit != null) sel.setNodePos(idx, new Vector3(hit.x, hit.y + 0.05f, hit.z));
+    else { float baseY = terrain.getBaseHeightSampler().heightAt(world.x, world.z, world.y); sel.setNodePos(idx, new Vector3(world.x, baseY + 0.05f, world.z)); }
+    if (nodeList != null) nodeList.setItems(buildNodeLabels(sel)); nodeList.setSelectedIndex(idx);
   }
 
   @Override public void onPointerUp(Vector3 world, int button, boolean shift, boolean ctrl) { dragging = false; }
@@ -290,6 +346,7 @@ public final class RiverTool implements Tool {
 
   private com.badlogic.gdx.utils.Array<String> buildNodeLabels(TerrainSpline s) {
     com.badlogic.gdx.utils.Array<String> arr = new com.badlogic.gdx.utils.Array<>();
+    if (s == null) return arr;
     for (int i=0;i<s.size();i++) {
       var n = s.getNodes().get(i);
       arr.add(String.format("%02d: (%.1f, %.1f, %.1f)", i, n.pos.x, n.pos.y, n.pos.z));

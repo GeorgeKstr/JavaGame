@@ -35,7 +35,6 @@ public class TerrainSpline {
   private float[] lx, ly, lz, rx, ry, rz; // length = sample count
   private int triPairs = 0; // number of quad segments (n-1)
   private volatile long lastRibbonRebuildMs = 0L;
-  private final java.util.concurrent.atomic.AtomicInteger ribbonBuildSeq = new java.util.concurrent.atomic.AtomicInteger(0);
 
   public void markRibbonDirty() { ribbonDirty = true; lx = ly = lz = rx = ry = rz = null; triPairs = 0; }
   public boolean isRibbonDirty() { return ribbonDirty; }
@@ -83,9 +82,8 @@ public class TerrainSpline {
     if (!ribbonDirty || ribbonRebuilding) return;
     // Throttle rebuilds to avoid overwhelming the renderer during drags
     long now = System.currentTimeMillis();
-    if (now - lastRibbonRebuildMs < 80) return; // try again soon
+    if (now - lastRibbonRebuildMs < 120) return; // try again next frame
     lastRibbonRebuildMs = now;
-    final int seq = ribbonBuildSeq.incrementAndGet();
     ribbonRebuilding = true;
     RIBBON_POOL.submit(() -> {
       try {
@@ -114,11 +112,9 @@ public class TerrainSpline {
           }
           triPairsL = n - 1;
         }
-        // Drop stale results if a newer build was requested
-        if (seq == ribbonBuildSeq.get()) {
-          this.lx = lxL; this.ly = lyL; this.lz = lzL; this.rx = rxL; this.ry = ryL; this.rz = rzL; this.triPairs = triPairsL;
-          this.ribbonDirty = false;
-        }
+        // Publish
+        this.lx = lxL; this.ly = lyL; this.lz = lzL; this.rx = rxL; this.ry = ryL; this.rz = rzL; this.triPairs = triPairsL;
+        this.ribbonDirty = false;
       } catch (Throwable ignored) {
         // Keep dirty so we can retry next time
       } finally {

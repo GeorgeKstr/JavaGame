@@ -25,6 +25,24 @@ public final class RoadTool implements Tool {
 
   private TerrainSpline active;
   private boolean dragging = false;
+  private com.badlogic.gdx.scenes.scene2d.ui.List<String> nodeList;
+
+  // ----- helpers -----
+  private static float projParamOnSegXZ(Vector3 a, Vector3 b, float px, float pz) {
+    float vx = b.x - a.x, vz = b.z - a.z;
+    float wx = px - a.x, wz = pz - a.z;
+    float denom = vx*vx + vz*vz;
+    if (denom <= 1e-6f) return 0f;
+    return (vx*wx + vz*wz) / denom;
+  }
+  private static float dist2ToSegXZ(Vector3 a, Vector3 b, float px, float pz) {
+    float t = projParamOnSegXZ(a, b, px, pz);
+    if (t < 0f) t = 0f; else if (t > 1f) t = 1f;
+    float sx = a.x + (b.x - a.x) * t;
+    float sz = a.z + (b.z - a.z) * t;
+    float dx = px - sx, dz = pz - sz;
+    return dx*dx + dz*dz;
+  }
 
   public RoadTool(SplinesLayer layer, TerrainSystem terrain) {
     this.layer = layer; this.terrain = terrain;
@@ -73,33 +91,32 @@ public final class RoadTool implements Tool {
     t.add(imp).width(100);
     container.add(t).left().row();
 
-    // Nodes list for the selected spline
-    if (sel != null) {
-      container.add(new Label("Nodes:", skin, "title")).left().padTop(8).row();
-      Table lt = new Table();
-      final com.badlogic.gdx.scenes.scene2d.ui.List<String> nodeList = new com.badlogic.gdx.scenes.scene2d.ui.List<>(skin);
-      nodeList.setItems(buildNodeLabels(sel));
-      nodeList.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
-        TerrainSpline cur = layer.getSelectedSpline();
-        if (cur == null || cur.getType()!=TerrainSpline.Type.ROAD) return;
-        int idx = nodeList.getSelectedIndex(); if (idx >= 0 && idx < cur.size()) layer.select(cur, idx);
-      }});
-      ScrollPane sp = new ScrollPane(nodeList, skin);
-      sp.setFadeScrollBars(false);
-      lt.add(sp).width(260).height(120).row();
-      TextButton del = new TextButton("Delete Selected Node", skin);
-      del.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
-        TerrainSpline cur = layer.getSelectedSpline();
-        if (cur == null || cur.getType()!=TerrainSpline.Type.ROAD) return;
-        int idx = nodeList.getSelectedIndex(); if (idx>=0 && idx < cur.size()) { cur.removeNode(idx); layer.select(cur, Math.min(idx, cur.size()-1)); nodeList.setItems(buildNodeLabels(cur)); }
-      }});
-      lt.add(del).left().padTop(6);
-      container.add(lt).left().row();
-    }
+    // Nodes list (always visible; contents depend on selected spline)
+    container.add(new Label("Nodes:", skin, "title")).left().padTop(8).row();
+    Table lt = new Table();
+    nodeList = new com.badlogic.gdx.scenes.scene2d.ui.List<>(skin);
+    nodeList.setItems(buildNodeLabels(sel));
+    nodeList.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+      TerrainSpline cur = layer.getSelectedSpline();
+      if (cur == null || cur.getType()!=TerrainSpline.Type.ROAD) return;
+      int idx = nodeList.getSelectedIndex(); if (idx >= 0 && idx < cur.size()) layer.select(cur, idx);
+    }});
+    ScrollPane sp = new ScrollPane(nodeList, skin);
+    sp.setFadeScrollBars(false);
+    lt.add(sp).width(260).height(120).row();
+    TextButton del = new TextButton("Delete Selected Node", skin);
+    del.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+      TerrainSpline cur = layer.getSelectedSpline();
+      if (cur == null || cur.getType()!=TerrainSpline.Type.ROAD) return;
+      int idx = nodeList.getSelectedIndex(); if (idx>=0 && idx < cur.size()) { cur.removeNode(idx); layer.select(cur, Math.min(idx, cur.size()-1)); nodeList.setItems(buildNodeLabels(cur)); }
+    }});
+    lt.add(del).left().padTop(6);
+    container.add(lt).left().row();
   }
 
   private com.badlogic.gdx.utils.Array<String> buildNodeLabels(TerrainSpline s) {
     com.badlogic.gdx.utils.Array<String> arr = new com.badlogic.gdx.utils.Array<>();
+    if (s == null) return arr;
     for (int i=0;i<s.size();i++) {
       var n = s.getNodes().get(i);
       arr.add(String.format("%02d: (%.1f, %.1f, %.1f)", i, n.pos.x, n.pos.y, n.pos.z));
@@ -116,17 +133,48 @@ public final class RoadTool implements Tool {
     if (button == com.badlogic.gdx.Input.Buttons.LEFT) {
       // Ctrl+Click: add node to selected or start new
       if (ctrl) {
-        TerrainSpline sel = layer.getSelectedSpline();
-        if (sel == null) sel = layer.createSpline(TerrainSpline.Type.ROAD);
-        float y = terrain.heightAt(world.x, world.z, world.y);
-        sel.addNode(new TerrainSplineNode(world.x, y, world.z));
-        layer.select(sel, sel.size()-1);
+        TerrainSpline spline = layer.getSelectedSpline();
+        float y = terrain.getBaseHeightSampler().heightAt(world.x, world.z, world.y) + 0.05f;
+        if (spline == null || spline.getType() != TerrainSpline.Type.ROAD || layer.getSelectedNode() < 0) {
+          if (spline == null) spline = layer.createSpline(TerrainSpline.Type.ROAD);
+          spline.addNode(new TerrainSplineNode(world.x, y, world.z));
+          layer.select(spline, spline.size()-1);
+          if (nodeList != null) { nodeList.setItems(buildNodeLabels(spline)); nodeList.setSelectedIndex(spline.size()-1); }
+          return;
+        }
+
+        int n = spline.size();
+        int iSel = layer.getSelectedNode();
+        java.util.List<TerrainSplineNode> nodes = spline.getNodes();
+        int insertAt;
+        if (n == 1) {
+          insertAt = 1;
+        } else if (iSel == 0) {
+          Vector3 a = nodes.get(0).pos, b = nodes.get(1).pos;
+          float tRaw = projParamOnSegXZ(a, b, world.x, world.z);
+          insertAt = (tRaw < 0f) ? 0 : 1;
+        } else if (iSel == n - 1) {
+          Vector3 a = nodes.get(n-2).pos, b = nodes.get(n-1).pos;
+          float tRaw = projParamOnSegXZ(a, b, world.x, world.z);
+          insertAt = (tRaw > 1f) ? n : (n - 1);
+        } else {
+          Vector3 a0 = nodes.get(iSel-1).pos, b0 = nodes.get(iSel).pos;
+          Vector3 a1 = nodes.get(iSel).pos, b1 = nodes.get(iSel+1).pos;
+          float d0 = dist2ToSegXZ(a0, b0, world.x, world.z);
+          float d1 = dist2ToSegXZ(a1, b1, world.x, world.z);
+          insertAt = (d0 <= d1) ? iSel : iSel + 1;
+        }
+        insertAt = Math.max(0, Math.min(insertAt, spline.size()));
+        spline.insertNode(insertAt, new TerrainSplineNode(world.x, y, world.z));
+        layer.select(spline, insertAt);
+        if (nodeList != null) { nodeList.setItems(buildNodeLabels(spline)); nodeList.setSelectedIndex(insertAt); }
         return;
       }
       // Pick nearest node
       var pick = layer.pickNode(world.x, world.z, 3.5f);
       if (pick != null && pick.spline.getType() == TerrainSpline.Type.ROAD) {
         layer.select(pick.spline, pick.nodeIndex);
+        if (nodeList != null) { nodeList.setItems(buildNodeLabels(pick.spline)); nodeList.setSelectedIndex(pick.nodeIndex); }
         dragging = true;
       } else {
         // click empty: unselect
@@ -142,8 +190,9 @@ public final class RoadTool implements Tool {
     TerrainSpline sel = layer.getSelectedSpline();
     int idx = layer.getSelectedNode();
     if (sel == null || idx < 0) return;
-    float y = terrain.heightAt(world.x, world.z, world.y);
+    float y = terrain.getBaseHeightSampler().heightAt(world.x, world.z, world.y) + 0.05f;
     sel.setNodePos(idx, new Vector3(world.x, y, world.z));
+    if (nodeList != null) { nodeList.setItems(buildNodeLabels(sel)); nodeList.setSelectedIndex(idx); }
   }
 
   @Override public void onPointerUp(Vector3 world, int button, boolean shift, boolean ctrl) { dragging = false; }
