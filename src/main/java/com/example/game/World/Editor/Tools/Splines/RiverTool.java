@@ -99,25 +99,23 @@ public final class RiverTool implements Tool {
     st.add(steepSlider).width(240).row();
     container.add(st).left().padBottom(8).row();
 
-    // Texture select + import
+    // Texture select using the shared TextureBrowser (open in textures/splines)
     Table t = new Table();
-    t.add(new Label("Texture:", skin)).left().padRight(6);
-    final SelectBox<String> sb = new SelectBox<>(skin);
-    sb.setItems(layer.listSplineTextureNames());
-    if (sel != null) {
-      String[] names = layer.listSplineTextureNames();
-      if (sel.textureId >=0 && sel.textureId < names.length) sb.setSelected(names[sel.textureId]);
-    }
-    sb.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
-      TerrainSpline s = layer.getSelectedSpline(); if (s==null) return; String[] names = layer.listSplineTextureNames();
-      String val = sb.getSelected(); for (int i=0;i<names.length;i++){ if (names[i].equals(val)) { s.textureId = i; break; } }
+    t.defaults().left().padRight(6);
+    final Label texLbl = new Label("Texture: " + currentTextureLabel(sel), skin);
+    TextButton selectTex = new TextButton("Select Texture...", skin);
+    selectTex.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+      com.example.game.World.Editor.TextureBrowser tb = new com.example.game.World.Editor.TextureBrowser(skin, terrain, "splines", tr -> {
+        TerrainSpline s = layer.getSelectedSpline();
+        if (s == null) return;
+        s.textureId = tr.id;
+        texLbl.setText("Texture: " + currentTextureLabel(s));
+      });
+      // best-effort: attach if stage exists
+      if (container.getStage() != null) tb.show(container.getStage());
     }});
-    TextButton imp = new TextButton("Import...", skin);
-    imp.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
-      int id = layer.importSplineTextureDesktop(); if (id>=0) { sb.setItems(layer.listSplineTextureNames()); sb.setSelectedIndex(id); TerrainSpline s = layer.getSelectedSpline(); if (s!=null) s.textureId=id; }
-    }});
-    t.add(sb).width(200).padRight(6);
-    t.add(imp).width(100);
+    t.add(texLbl);
+    t.add(selectTex);
     container.add(t).left().row();
 
     // Nodes list (always visible; contents depend on selected spline)
@@ -137,7 +135,15 @@ public final class RiverTool implements Tool {
     del.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
       TerrainSpline cur = layer.getSelectedSpline();
       if (cur == null || cur.getType()!=TerrainSpline.Type.RIVER) return;
-      int idx = nodeList.getSelectedIndex(); if (idx>=0 && idx < cur.size()) { cur.removeNode(idx); layer.select(cur, Math.min(idx, cur.size()-1)); nodeList.setItems(buildNodeLabels(cur)); }
+      // Prefer list selection; fallback to layer's selected node
+      int idx = (nodeList != null ? nodeList.getSelectedIndex() : -1);
+      if (idx < 0 || idx >= cur.size()) idx = layer.getSelectedNode();
+      if (idx < 0 || idx >= cur.size()) return;
+      cur.removeNode(idx);
+      int newSel = Math.min(idx, cur.size()-1);
+      layer.select(cur, newSel);
+      if (nodeList != null) { nodeList.setItems(buildNodeLabels(cur)); if (newSel >= 0) nodeList.setSelectedIndex(newSel); }
+      cur.markRibbonDirty(); cur.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 8);
     }});
     lt.add(del).left().padTop(6);
     container.add(lt).left().row();
@@ -269,6 +275,7 @@ public final class RiverTool implements Tool {
     // Throttled by TerrainSpline.rebuildRibbonAsync internal timer
     sel.markRibbonDirty();
     sel.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 8);
+    if (nodeList != null) { nodeList.setItems(buildNodeLabels(sel)); nodeList.setSelectedIndex(idx); }
   }
 
   @Override public void onPointerUp(Vector3 world, int button, boolean shift, boolean ctrl) {
@@ -384,5 +391,13 @@ public final class RiverTool implements Tool {
       arr.add(String.format("%02d: (%.1f, %.1f, %.1f)", i, n.pos.x, n.pos.y, n.pos.z));
     }
     return arr;
+  }
+
+  private String currentTextureLabel(TerrainSpline s) {
+    if (s == null) return "-";
+    String[] names = layer.listSplineTextureNames();
+    int id = s.textureId;
+    if (id >= 0 && id < names.length) return names[id];
+    return "-";
   }
 }

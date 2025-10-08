@@ -2,12 +2,11 @@ package com.example.game.World.Editor.Tools.Terrain;
 
 import com.badlogic.gdx.graphics.Pixmap;
 import com.badlogic.gdx.graphics.Texture;
+import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.scenes.scene2d.Actor;
 import com.badlogic.gdx.scenes.scene2d.ui.*;
 import com.badlogic.gdx.scenes.scene2d.utils.ChangeListener;
-import com.badlogic.gdx.utils.Align;
-import com.badlogic.gdx.utils.Array;
-import com.badlogic.gdx.utils.Scaling;
+import com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable;
 import com.example.game.World.MapResource;
 import com.example.game.World.TerrainSystem;
 import com.example.game.World.Editor.Tools.AbstractBrushTool;
@@ -21,19 +20,29 @@ public final class PaintTextureTool extends AbstractBrushTool {
 
   // UI
   private Label activeLbl;
-  private Table grid;          // grid of thumbnails inside ScrollPane
-  private ScrollPane scroller;
+  private Image previewImg;
+  private Texture previewTex;
 
   // state
   private int layerIndex = 0;
-  private final Array<Texture> thumbTextures = new Array<>(false, 16); // for cleanup
-  private static final int THUMB = 64;   // px square thumbnails
-  private static final int COLS = 3;     // thumbnails per row
+  private static final int THUMB = 64;   // px square preview
 
   public PaintTextureTool(TerrainSystem terrain, BrushSettings brush){
     super(brush, terrain);
     this.terrain = terrain;
     this.map = terrain.getMap();
+  }
+
+  private void rebuildPreview() {
+    // Dispose previous
+    if (previewTex != null) { previewTex.dispose(); previewTex = null; }
+    var texRefs = map.getManifest().groundTextures;
+    if (texRefs == null || texRefs.isEmpty()) { previewImg.setDrawable(null); return; }
+    int clamped = Math.max(0, Math.min(layerIndex, texRefs.size()-1));
+    MapResource.TextureRef tr = texRefs.get(clamped);
+    // Build a small preview texture (use existing helper)
+    previewTex = buildThumbnail(tr.file, THUMB, THUMB);
+    previewImg.setDrawable(new TextureRegionDrawable(new TextureRegion(previewTex)));
   }
 
   @Override public String name() { return "Paint"; }
@@ -49,105 +58,29 @@ public final class PaintTextureTool extends AbstractBrushTool {
     activeLbl = new Label(currentSelectionText(), skin);
     parent.add(activeLbl).left().row();
 
-    // Thumbnail grid inside a scroll pane
-    grid = new Table();
-    grid.defaults().pad(4);
-    scroller = new ScrollPane(grid, skin);
-    scroller.setFadeScrollBars(false);
-    scroller.setScrollingDisabled(true, false);
-    parent.add(scroller).width(260).height(180).row();
-
-    rebuildGrid(skin);
-
-    // Import / Refresh buttons
-    Table row = new Table();
-    TextButton importBtn = new TextButton("Import...", skin);
-    TextButton refreshBtn = new TextButton("Refresh", skin);
-    row.add(importBtn).padRight(6); row.add(refreshBtn);
-    parent.add(row).left().row();
-
-    importBtn.addListener(new ChangeListener() {
-      @Override public void changed(ChangeEvent event, Actor actor) {
-        int newId = terrain.importGroundTextureDesktop(1.0f); // default uvScale
-        if (newId >= 0) {
-          layerIndex = newId;
-          terrain.reloadGroundTextures();
-          rebuildGrid(skin);
-          activeLbl.setText(currentSelectionText());
-        }
-      }
-    });
-    refreshBtn.addListener(new ChangeListener() {
-      @Override public void changed(ChangeEvent event, Actor actor) {
-        terrain.reloadGroundTextures();
-        rebuildGrid(skin);
-        if (layerIndex >= map.getManifest().groundTextures.size()) {
-          layerIndex = Math.max(0, map.getManifest().groundTextures.size() - 1);
-        }
+    // Selected preview + open browser
+    Table selRow = new Table();
+    selRow.defaults().left().padRight(8);
+    previewImg = new Image();
+    rebuildPreview();
+    TextButton selectBtn = new TextButton("Select Texture...", skin);
+    selectBtn.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+      com.example.game.World.Editor.TextureBrowser tb = new com.example.game.World.Editor.TextureBrowser(skin, terrain, "ground", tr -> {
+        if (tr == null) return;
+        layerIndex = tr.id;
         activeLbl.setText(currentSelectionText());
-      }
-    });
-  }
-
-  private void rebuildGrid(Skin skin) {
-    // clear old UI + textures
-    grid.clearChildren();
-    for (Texture t : thumbTextures) t.dispose();
-    thumbTextures.clear();
-
-    var texRefs = map.getManifest().groundTextures;
-    if (texRefs == null || texRefs.isEmpty()) return;
-
-    int col = 0;
-    Table row = new Table();
-    for (int i = 0; i < texRefs.size(); i++) {
-      MapResource.TextureRef tr = texRefs.get(i);
-
-      // build thumbnail texture (scaled to THUMB x THUMB)
-      Texture thumb = buildThumbnail(tr.file, THUMB, THUMB);
-      thumbTextures.add(thumb);
-
-      // Image + label stacked in a button-like container
-      Image img = new Image(thumb);
-      img.setScaling(Scaling.fit);
-      img.setAlign(Align.center);
-
-      Label name = new Label(shortName(tr), skin);
-      name.setAlignment(Align.center);
-
-      Table cell = new Table();
-      cell.defaults().growX();
-      cell.add(img).size(THUMB, THUMB).row();
-      cell.add(name).padTop(2).width(THUMB);
-
-      // Select behavior
-      Button btn = new Button(skin, "toggle"); // uses your Skin's toggle style
-      btn.add(cell).pad(4);
-      btn.setChecked(i == layerIndex);
-
-      final int idx = i;
-      btn.addListener(new ChangeListener() {
-        @Override public void changed(ChangeEvent event, Actor actor) {
-          layerIndex = idx;
-          activeLbl.setText(currentSelectionText());
-          // ensure only one is checked – manually uncheck others
-          for (Actor a : grid.getChildren()) {
-            if (a instanceof Button && a != btn) ((Button)a).setChecked(false);
-          }
-        }
+        rebuildPreview();
       });
+      if (parent.getStage() != null) tb.show(parent.getStage());
+    }});
+    selRow.add(previewImg).size(64,64);
+    selRow.add(selectBtn);
+    parent.add(selRow).left().row();
 
-      row.add(btn);
-      col++;
-      if (col >= COLS) {
-        grid.add(row).left().row();
-        row = new Table();
-        col = 0;
-      }
-    }
-    if (col > 0) grid.add(row).left().row();
-    scroller.layout();
+    // (Removed legacy scrolling grid and import/refresh; use TextureBrowser instead)
   }
+
+  // (Removed rebuildGrid and scrolling thumbnails)
 
   private String shortName(MapResource.TextureRef tr) {
     String label = (tr.name != null && !tr.name.isEmpty()) ? tr.name : tr.file;
@@ -200,7 +133,6 @@ public final class PaintTextureTool extends AbstractBrushTool {
 
   /** Optional: call this from your layer's onDeactivate() to free thumbs immediately. */
   public void disposeThumbs() {
-    for (Texture t : thumbTextures) t.dispose();
-    thumbTextures.clear();
+    if (previewTex != null) { previewTex.dispose(); previewTex = null; }
   }
 }

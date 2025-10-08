@@ -45,6 +45,35 @@ public class TerrainSystem implements HeightSampler {
     this.picking  = new TerrainPicking(world);
   }
 
+  /** Desktop file chooser that imports a texture into a specific subfolder under textures/ground/. */
+  public int importGroundTextureDesktopInto(String subfolder, float uvScale) {
+    if (Gdx.app.getType() != com.badlogic.gdx.Application.ApplicationType.Desktop) return -1;
+
+    final String[] abs = { null };
+    try {
+      javax.swing.SwingUtilities.invokeAndWait(() -> {
+        javax.swing.JFileChooser fc = new javax.swing.JFileChooser();
+        fc.setDialogTitle("Import Texture");
+        fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Images", "png", "jpg", "jpeg", "bmp"));
+        if (fc.showOpenDialog(null) == javax.swing.JFileChooser.APPROVE_OPTION) {
+          abs[0] = fc.getSelectedFile().getAbsolutePath();
+        }
+      });
+    } catch (Exception ignored) {}
+
+    if (abs[0] == null) return -1;
+
+    var fh = Gdx.files.absolute(abs[0]);
+    if (!fh.exists()) return -1;
+
+    byte[] data = fh.readBytes();
+    MapResource.TextureRef tr = world.map.importGroundTextureIntoFolder(fh.name(), data, subfolder);
+    tr.uvScale = uvScale;
+    // Do NOT reload here (GL calls must happen on the render thread).
+    // Caller (e.g., TextureBrowser) will post a reload to the GL thread.
+    return tr.id;
+  }
+
   // ----------------------------------------------------------------------------
   // Streaming / Update
   // ----------------------------------------------------------------------------

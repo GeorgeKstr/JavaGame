@@ -61,6 +61,7 @@ public class MapResource {
 
   private final Manifest manifest;
   private byte[] bytes; // entire .map in memory (simple & fast)
+  private String sourcePath; // path on disk when loaded (optional)
 
   // NEW: staged textures not yet written to the .map file on disk
   private final Map<String, byte[]> stagedTextures = new LinkedHashMap<>();
@@ -79,7 +80,9 @@ public class MapResource {
   public static MapResource loadFromFile(String path) {
     try {
       byte[] data = Files.readAllBytes(Paths.get(path));
-      return fromBytes(data);
+      MapResource mr = fromBytes(data);
+      mr.sourcePath = path;
+      return mr;
     } catch (IOException e) {
       throw new RuntimeException("Failed to read map: " + path, e);
     }
@@ -89,6 +92,7 @@ public class MapResource {
   public void reload(String path) {
     try {
       bytes = Files.readAllBytes(Paths.get(path));
+      this.sourcePath = path;
     } catch (IOException e) {
       e.printStackTrace();
     }
@@ -209,6 +213,60 @@ public class MapResource {
     
     if (!manifest.groundTextures.isEmpty()) manifest.version = Math.max(manifest.version, 2);
     return tr;
+  }
+
+  /** Import into a specific subfolder under textures/ (folder may be empty or nested like "ground/rock/dark"). */
+  public TextureRef importGroundTextureIntoFolder(String originalFilename, byte[] data, String subfolder) {
+    if (data == null || data.length == 0) throw new IllegalArgumentException("Empty texture data");
+    String safeName = sanitizeFilename(originalFilename != null ? originalFilename : "texture.png");
+    String folder = normalizeFolder(subfolder);
+    String basePath = folder.isEmpty() ? "textures/" : ("textures/" + folder + "/");
+    String pathInZip = uniqueTexturePath(manifest, basePath + safeName);
+    int id = nextTextureId(manifest);
+
+    TextureRef tr = new TextureRef();
+    tr.id = id; tr.name = stripExtension(safeName); tr.file = pathInZip; tr.uvScale = 1f;
+    manifest.groundTextures.add(tr);
+    stagedTextures.put(pathInZip, data);
+    if (!manifest.groundTextures.isEmpty()) manifest.version = Math.max(manifest.version, 2);
+    return tr;
+  }
+
+  /** List distinct subfolders under textures/ ("" included for root). */
+  public Set<String> listTextureFolders() {
+    Set<String> out = new TreeSet<>();
+    out.add("");
+    for (TextureRef tr : manifest.groundTextures) {
+      String f = folderOf(tr.file);
+      if (f != null) out.add(f);
+    }
+    return out;
+  }
+
+  /** List textures that are exactly in the given subfolder ("" for root), under textures/. */
+  public java.util.List<TextureRef> listTexturesInFolder(String subfolder) {
+    String want = normalizeFolder(subfolder);
+    List<TextureRef> out = new ArrayList<>();
+    for (TextureRef tr : manifest.groundTextures) {
+      String f = folderOf(tr.file);
+      if (Objects.equals(f, want)) out.add(tr);
+    }
+    return out;
+  }
+
+  /** Move texture by id to a different subfolder (updates path; preserves staged bytes if any). Root is textures/. */
+  public void moveTextureToSubfolder(int textureId, String subfolder) {
+    TextureRef tr = null;
+    for (TextureRef t : manifest.groundTextures) if (t.id == textureId) { tr = t; break; }
+    if (tr == null) return;
+    String oldPath = tr.file;
+    String name = fileNameOnly(oldPath);
+    String basePath = normalizeFolder(subfolder);
+    String newPath = uniqueTexturePath(manifest, (basePath.isEmpty()?"textures/":"textures/"+basePath+"/") + name);
+    // If staged, rekey
+    byte[] staged = stagedTextures.remove(oldPath);
+    if (staged != null) stagedTextures.put(newPath, staged);
+    tr.file = newPath;
   }
 
   /** List of staged texture paths (for diagnostics/UI). */
@@ -353,6 +411,32 @@ public class MapResource {
     clearStagedTextures();
   }
 
+  /** Save back to the last known source path, if available, including staged textures. */
+  public void saveInPlaceDeltaIncludingStaged(Map<String, byte[]> chunkFiles) {
+    if (this.sourcePath == null || this.sourcePath.isEmpty()) return;
+    saveDeltaIncludingStaged(this.sourcePath, this.manifest, chunkFiles);
+  }
+
+  /** Remove a texture by id from manifest and staged entries, then renumber ids to be contiguous. */
+  public void removeTextureById(int id) {
+    if (manifest.groundTextures == null || manifest.groundTextures.isEmpty()) return;
+    String removedPath = null;
+    java.util.Iterator<TextureRef> it = manifest.groundTextures.iterator();
+    while (it.hasNext()) {
+      TextureRef tr = it.next();
+      if (tr.id == id) { removedPath = tr.file; it.remove(); break; }
+    }
+    if (removedPath != null) {
+      stagedTextures.remove(removedPath);
+      // renumber
+      for (int i = 0; i < manifest.groundTextures.size(); i++) {
+        manifest.groundTextures.get(i).id = i;
+      }
+      manifest.defaultTexture = Math.max(0, Math.min(manifest.defaultTexture, Math.max(0, manifest.groundTextures.size()-1)));
+      if (!manifest.groundTextures.isEmpty()) manifest.version = Math.max(manifest.version, 2);
+    }
+  }
+
 
   // ----------------------------
   // Manifest JSON writer
@@ -420,6 +504,30 @@ public class MapResource {
       if (!existing.contains(cand)) return cand;
     }
     return stem + "_import" + ext;
+  }
+
+  private static String normalizeFolder(String input) {
+    if (input == null) return "";
+    String s = input.trim().replace('\\','/');
+    if (s.startsWith("/")) s = s.substring(1);
+    if (s.endsWith("/")) s = s.substring(0, s.length()-1);
+    return s;
+  }
+
+  private static String folderOf(String pathInZip) {
+    if (pathInZip == null) return "";
+    String p = pathInZip.replace('\\','/');
+    if (!p.startsWith("textures/")) return "";
+    String rest = p.substring("textures/".length());
+    int slash = rest.lastIndexOf('/');
+    if (slash < 0) return ""; // root
+    return rest.substring(0, slash);
+  }
+
+  private static String fileNameOnly(String path) {
+    String p = path.replace('\\','/');
+    int slash = p.lastIndexOf('/');
+    return (slash >= 0) ? p.substring(slash+1) : p;
   }
 
   private static int nextTextureId(Manifest man) {
