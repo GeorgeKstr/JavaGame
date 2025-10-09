@@ -2,6 +2,7 @@ package com.example.game.World.Editor.Tools.Splines;
 
 import com.badlogic.gdx.graphics.Camera;
 import com.badlogic.gdx.graphics.GL20;
+import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.glutils.ImmediateModeRenderer20;
 import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.scenes.scene2d.Actor;
@@ -15,6 +16,9 @@ import com.example.game.World.Splines.TerrainSplineNode;
 import com.example.game.World.TerrainSystem;
 import com.badlogic.gdx.Gdx;
 import com.example.game.World.Editor.EditorContext;
+import com.example.game.World.MapResource;
+
+import java.util.HashMap;
 
 import java.util.List;
 
@@ -22,7 +26,8 @@ import java.util.List;
 public final class RiverTool implements Tool {
   private final SplinesLayer layer;
   private final TerrainSystem terrain;
-  private final ImmediateModeRenderer20 im = new ImmediateModeRenderer20(65536, false, true, 0);
+  private final ImmediateModeRenderer20 im = new ImmediateModeRenderer20(65536, false, true, 1);
+  private final HashMap<Integer, Texture> texCache = new HashMap<>();
 
   private TerrainSpline active;
   private boolean dragging = false;
@@ -98,6 +103,17 @@ public final class RiverTool implements Tool {
     st.add(steepLabel).left().row();
     st.add(steepSlider).width(240).row();
     container.add(st).left().padBottom(8).row();
+
+    // Transparency slider (alpha multiplier 0..1)
+    Table at = new Table();
+    final Label alphaLbl = new Label("Transparency: "+ (sel==null?"-":String.format("%.2f", sel.transparency)), skin);
+    final Slider alphaSlider = new Slider(0f, 1f, 0.01f, false, skin);
+    if (sel != null) alphaSlider.setValue(sel.transparency);
+    alphaSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+      TerrainSpline s = layer.getSelectedSpline(); if (s==null || s.getType()!=TerrainSpline.Type.RIVER) return; s.transparency = alphaSlider.getValue(); alphaLbl.setText(String.format("Transparency: %.2f", s.transparency)); }});
+    at.add(alphaLbl).left().row();
+    at.add(alphaSlider).width(240).row();
+    container.add(at).left().padBottom(8).row();
 
     // Texture select using the shared TextureBrowser (open in textures/splines)
     Table t = new Table();
@@ -260,18 +276,11 @@ public final class RiverTool implements Tool {
     int sx = Gdx.input.getX();
     int sy = Gdx.input.getY();
     com.badlogic.gdx.math.collision.Ray ray = cam.getPickRay(sx, sy);
-    // Intersect with y=0 plane to get XZ quickly; then sample base height once
-    float denom = ray.direction.y;
-    Vector3 pos;
-    if (Math.abs(denom) > 1e-6f) {
-      float t = (0f - ray.origin.y) / denom;
-      pos = new Vector3(ray.origin).mulAdd(ray.direction, t);
-    } else {
-      Vector3 cur = sel.getNodes().get(idx).pos;
-      pos = new Vector3(cur.x, 0f, cur.z);
-    }
-    float h = terrain.getBaseHeightSampler().heightAt(pos.x, pos.z, Float.NaN);
-    sel.setNodePos(idx, new Vector3(pos.x, h + 0.05f, pos.z));
+    // Use shared TerrainPicking API (same as terrain tools)
+    var picker = terrain.getPicker();
+    Vector3 hit = picker.rayIntersectTerrain(ray, terrain.getBaseHeightSampler(), 2.5f, 6);
+    if (hit == null) hit = picker.rayIntersectTerrainFastPlane(ray, terrain.getBaseHeightSampler());
+    sel.setNodePos(idx, new Vector3(hit.x, hit.y + 0.05f, hit.z));
     // Throttled by TerrainSpline.rebuildRibbonAsync internal timer
     sel.markRibbonDirty();
     sel.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 8);
@@ -290,18 +299,18 @@ public final class RiverTool implements Tool {
   }
 
   @Override public void render3D(Camera cam) {
-    // Draw all river splines as blue-ish polylines; highlight selected; draw node hitboxes
+    // Draw all river splines as textured ribbons (fallback to colored if texture unavailable)
     Gdx.gl.glEnable(GL20.GL_BLEND);
     Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
     for (TerrainSpline s : layer.getSplines()) {
       if (s.getType() != TerrainSpline.Type.RIVER) continue;
       if (!s.hasRibbon()) continue;
       boolean sel = (s == layer.getSelectedSpline());
-      // Deeper blue and less transparent when selected; more transparent when not selected
-      float rr, gg, bb, aa;
-      if (sel) { rr = 0.05f; gg = 0.35f; bb = 1.0f; aa = 0.8f; }
-      else { rr = 0.1f; gg = 0.6f; bb = 1.0f; aa = 0.25f; }
-      boolean atop = Boolean.TRUE.equals(CVars.BRUSH_ALWAYS_ON_TOP.get());
+      float aa = Math.max(0f, Math.min(1f, s.transparency));
+      float[] sunTint = computeSunTint();
+      float rr = sunTint[0], gg = sunTint[1], bb = sunTint[2];
+      Texture tex = getSplineTexture(s.textureId);
+      boolean atop = false;
       if (atop) { Gdx.gl.glDisable(GL20.GL_DEPTH_TEST); Gdx.gl.glDepthMask(false); }
       Gdx.gl.glDisable(GL20.GL_CULL_FACE);
 
@@ -316,13 +325,31 @@ public final class RiverTool implements Tool {
       while (i < n - 1) {
         int end = Math.min(n - 1, i + maxSegmentsPerBatch);
         im.begin(cam.combined, GL20.GL_TRIANGLES);
+        float vLen = 0f; // accumulate along centerline (V axis)
         for (int k = i; k < end; k++) {
+          float ax = 0.5f * (lx[k] + rx[k]);
+          float az = 0.5f * (lz[k] + rz[k]);
+          float bx = 0.5f * (lx[k+1] + rx[k+1]);
+          float bz = 0.5f * (lz[k+1] + rz[k+1]);
+          float du = (float)Math.sqrt((bx-ax)*(bx-ax) + (bz-az)*(bz-az));
+          float v2 = vLen + du / Math.max(0.1f, s.width); // tile along length proportional to width
+          if (tex != null) tex.bind();
+          // Rotate UVs 90 degrees: U across width [left=0,right=1], V along length
+          // tri 1
+          if (tex != null) im.texCoord(0f, vLen);
           im.color(rr,gg,bb,aa); im.vertex(lx[k],   ly[k]  +yLift, lz[k]);
+          if (tex != null) im.texCoord(1f, vLen);
           im.color(rr,gg,bb,aa); im.vertex(rx[k],   ry[k]  +yLift, rz[k]);
+          if (tex != null) im.texCoord(0f, v2);
           im.color(rr,gg,bb,aa); im.vertex(lx[k+1], ly[k+1]+yLift, lz[k+1]);
+          // tri 2
+          if (tex != null) im.texCoord(1f, vLen);
           im.color(rr,gg,bb,aa); im.vertex(rx[k],   ry[k]  +yLift, rz[k]);
+          if (tex != null) im.texCoord(1f, v2);
           im.color(rr,gg,bb,aa); im.vertex(rx[k+1], ry[k+1]+yLift, rz[k+1]);
+          if (tex != null) im.texCoord(0f, v2);
           im.color(rr,gg,bb,aa); im.vertex(lx[k+1], ly[k+1]+yLift, lz[k+1]);
+          vLen = v2;
         }
         im.end();
         i = end;
@@ -399,5 +426,56 @@ public final class RiverTool implements Tool {
     int id = s.textureId;
     if (id >= 0 && id < names.length) return names[id];
     return "-";
+  }
+
+  private Texture getSplineTexture(int id) {
+    if (id < 0) return null;
+    Texture cached = texCache.get(id);
+    if (cached != null) return cached;
+    // Resolve texture path by MapResource manifest id (shared list)
+    MapResource map = terrain.getMap();
+    var list = map.getManifest().groundTextures;
+    if (id >= list.size()) return null;
+    String path = list.get(id).file;
+    byte[] bytes = map.getTextureBytes(path);
+    if (bytes == null || bytes.length == 0) return null;
+    Texture t = new Texture(new com.badlogic.gdx.graphics.Pixmap(bytes, 0, bytes.length));
+    t.setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
+    t.setWrap(Texture.TextureWrap.Repeat, Texture.TextureWrap.Repeat);
+    texCache.put(id, t);
+    return t;
+  }
+
+  // Compute a simple day/night tint similar in spirit to terrain lighting.
+  // Uses time-of-day CVAR to compute a sun direction and derives an intensity from elevation.
+  private float[] computeSunTint() {
+    // Time of day 0..24
+    float hour = com.example.game.Config.cvar.CVars.RENDER_TIME_OF_DAY.get();
+    float t = (hour % 24f) / 24f;
+    float az = (float)(t * Math.PI * 2.0); // 0..2π
+    // Equinox-like elevation curve (peak at noon)
+    float maxElevDeg = 75f;
+    float maxElevRad = (float)(Math.toRadians(maxElevDeg));
+    float elev = (float)(maxElevRad * Math.sin(az - Math.PI * 0.5));
+    float sinE = (float)Math.sin(elev);
+    float cosE = (float)Math.cos(elev);
+    // World orientation consistent with EditorScreen
+    float sunY = sinE; // elevation drives brightness
+
+    // Intensity from elevation; keep some ambient so nights aren't black
+    float intensity = Math.max(0f, sunY);
+    intensity = 0.2f + 0.8f * intensity; // 0.2 at night .. 1.0 at noon
+
+    // Warm/cool balance from CVAR
+    float warmth = com.example.game.Config.cvar.CVars.RENDER_SKY_WARMTH.get(); // 0..1
+    float coolR=0.60f, coolG=0.70f, coolB=0.80f;
+    float warmR=0.95f, warmG=0.88f, warmB=0.72f;
+    float r = coolR + (warmR - coolR) * warmth;
+    float g = coolG + (warmG - coolG) * warmth;
+    float b = coolB + (warmB - coolB) * warmth;
+
+    // Apply intensity
+    r *= intensity; g *= intensity; b *= intensity;
+    return new float[]{ r, g, b };
   }
 }

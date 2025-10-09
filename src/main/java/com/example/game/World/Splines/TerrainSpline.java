@@ -18,6 +18,7 @@ public class TerrainSpline {
   public float riverDepth = 2f;  // meters
   public float bankFalloff = 0.5f; // 0..1
   public int textureId = 0;      // index into Splines texture list (separate from ground textures)
+  public float transparency = 0.8f; // 0..1 alpha multiplier for ribbon rendering
 
   public TerrainSpline(Type type) { this.type = type; }
   public Type getType() { return type; }

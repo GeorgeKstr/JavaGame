@@ -47,8 +47,10 @@ public final class BrushOverlay {
     int sy = Gdx.input.getY();
     Ray ray = ((PerspectiveCamera) cam).getPickRay(sx, sy);
 
-    // Intersect against the terrain heightfield using fast plane+sample on BASE heights
-    Vector3 hit = terrain.getPicker().rayIntersectTerrainFastPlane(ray, terrain.getBaseHeightSampler());
+    // Intersect against the terrain heightfield using the shared picker (hill-aware),
+    // fallback to fast plane if no intersection is found within range.
+    Vector3 hit = terrain.getPicker().rayIntersectTerrain(ray, terrain.getBaseHeightSampler(), 2.5f, 6);
+    if (hit == null) hit = terrain.getPicker().rayIntersectTerrainFastPlane(ray, terrain.getBaseHeightSampler());
     hasHit = (hit != null);
     if (!hasHit) return;
 
