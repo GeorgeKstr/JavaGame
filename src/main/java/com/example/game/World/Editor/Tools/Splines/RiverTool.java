@@ -8,7 +8,6 @@ import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.scenes.scene2d.Actor;
 import com.badlogic.gdx.scenes.scene2d.ui.*;
 import com.badlogic.gdx.scenes.scene2d.utils.ChangeListener;
-import com.example.game.Config.cvar.CVars;
 import com.example.game.World.Editor.Tools.Tool;
 import com.example.game.World.Editor.Layers.SplinesLayer;
 import com.example.game.World.Splines.TerrainSpline;
@@ -27,6 +26,7 @@ public final class RiverTool implements Tool {
   private final SplinesLayer layer;
   private final TerrainSystem terrain;
   private final ImmediateModeRenderer20 im = new ImmediateModeRenderer20(65536, false, true, 1);
+  private final ImmediateModeRenderer20 imLines = new ImmediateModeRenderer20(16384, false, true, 0);
   private final HashMap<Integer, Texture> texCache = new HashMap<>();
 
   private TerrainSpline active;
@@ -355,13 +355,17 @@ public final class RiverTool implements Tool {
         i = end;
       }
 
-      if (atop) { Gdx.gl.glDepthMask(true); Gdx.gl.glEnable(GL20.GL_DEPTH_TEST); }
+      // Ensure overlays (centerline and node boxes) draw with solid color (no texturing)
+      Gdx.gl.glBindTexture(GL20.GL_TEXTURE_2D, 0);
+
+      Gdx.gl.glDepthMask(true); 
+      Gdx.gl.glEnable(GL20.GL_DEPTH_TEST);
       Gdx.gl.glEnable(GL20.GL_CULL_FACE);
 
       // Centerline poly for guidance (midpoints)
       float r = 0.08f, g = sel ? 0.5f : 0.5f, b = 1.0f;
       float a = sel ? 1f : 0.5f;
-      im.begin(cam.combined, GL20.GL_LINES);
+      imLines.begin(cam.combined, GL20.GL_LINES);
       for (int j = 0; j < n - 1; j++) {
         float ax = 0.5f * (lx[j] + rx[j]);
         float ay = 0.5f * (ly[j] + ry[j]) + 0.05f;
@@ -369,14 +373,14 @@ public final class RiverTool implements Tool {
         float bx = 0.5f * (lx[j+1] + rx[j+1]);
         float by = 0.5f * (ly[j+1] + ry[j+1]) + 0.05f;
         float bz = 0.5f * (lz[j+1] + rz[j+1]);
-        im.color(r, g, b, a); im.vertex(ax, ay, az);
-        im.color(r, g, b, a); im.vertex(bx, by, bz);
+        imLines.color(r, g, b, a); imLines.vertex(ax, ay, az);
+        imLines.color(r, g, b, a); imLines.vertex(bx, by, bz);
       }
-      im.end();
+      imLines.end();
 
       // node hitboxes (3D wire boxes centered at node's stored height); batch drawing
       List<com.example.game.World.Splines.TerrainSplineNode> nodes = s.getNodes();
-      im.begin(cam.combined, GL20.GL_LINES);
+      imLines.begin(cam.combined, GL20.GL_LINES);
       for (int k=0;k<nodes.size();k++){
         Vector3 p = nodes.get(k).pos;
         float baseY = p.y - 0.05f; // nodes are kept at base + 0.05f during edits
@@ -387,25 +391,33 @@ public final class RiverTool implements Tool {
         float x0 = p.x - halfX, x1 = p.x + halfX;
         float z0 = p.z - halfZ, z1 = p.z + halfZ;
 
-        float cr= 0.1f, cg= 0.8f, cb= 1.0f; float ca= 1f;
-        if (sel && k==layer.getSelectedNode()) { cr=1.0f; cg=0.4f; cb=0.4f; }
+        // Colors: light blue when selected spline, darker blue when not; selected node = red
+        int selIdx = layer.getSelectedNode();
+        float cr, cg, cb, ca;
+        if (sel && k == selIdx) {
+          cr = 1.0f; cg = 0.25f; cb = 0.25f; ca = 1.0f; // selected node: red
+        } else if (sel) {
+          cr = 0.20f; cg = 0.60f; cb = 1.00f; ca = 1.0f; // selected spline: lighter blue
+        } else {
+          cr = 0.08f; cg = 0.35f; cb = 0.60f; ca = 0.9f; // non-selected spline: darker blue
+        }
         // bottom rectangle
-        im.color(cr,cg,cb,ca); im.vertex(x0, y0, z0); im.color(cr,cg,cb,ca); im.vertex(x1, y0, z0);
-        im.color(cr,cg,cb,ca); im.vertex(x1, y0, z0); im.color(cr,cg,cb,ca); im.vertex(x1, y0, z1);
-        im.color(cr,cg,cb,ca); im.vertex(x1, y0, z1); im.color(cr,cg,cb,ca); im.vertex(x0, y0, z1);
-        im.color(cr,cg,cb,ca); im.vertex(x0, y0, z1); im.color(cr,cg,cb,ca); im.vertex(x0, y0, z0);
+        imLines.color(cr,cg,cb,ca); imLines.vertex(x0, y0, z0); imLines.color(cr,cg,cb,ca); imLines.vertex(x1, y0, z0);
+        imLines.color(cr,cg,cb,ca); imLines.vertex(x1, y0, z0); imLines.color(cr,cg,cb,ca); imLines.vertex(x1, y0, z1);
+        imLines.color(cr,cg,cb,ca); imLines.vertex(x1, y0, z1); imLines.color(cr,cg,cb,ca); imLines.vertex(x0, y0, z1);
+        imLines.color(cr,cg,cb,ca); imLines.vertex(x0, y0, z1); imLines.color(cr,cg,cb,ca); imLines.vertex(x0, y0, z0);
         // top rectangle
-        im.color(cr,cg,cb,ca); im.vertex(x0, y1, z0); im.color(cr,cg,cb,ca); im.vertex(x1, y1, z0);
-        im.color(cr,cg,cb,ca); im.vertex(x1, y1, z0); im.color(cr,cg,cb,ca); im.vertex(x1, y1, z1);
-        im.color(cr,cg,cb,ca); im.vertex(x1, y1, z1); im.color(cr,cg,cb,ca); im.vertex(x0, y1, z1);
-        im.color(cr,cg,cb,ca); im.vertex(x0, y1, z1); im.color(cr,cg,cb,ca); im.vertex(x0, y1, z0);
+        imLines.color(cr,cg,cb,ca); imLines.vertex(x0, y1, z0); imLines.color(cr,cg,cb,ca); imLines.vertex(x1, y1, z0);
+        imLines.color(cr,cg,cb,ca); imLines.vertex(x1, y1, z0); imLines.color(cr,cg,cb,ca); imLines.vertex(x1, y1, z1);
+        imLines.color(cr,cg,cb,ca); imLines.vertex(x1, y1, z1); imLines.color(cr,cg,cb,ca); imLines.vertex(x0, y1, z1);
+        imLines.color(cr,cg,cb,ca); imLines.vertex(x0, y1, z1); imLines.color(cr,cg,cb,ca); imLines.vertex(x0, y1, z0);
         // vertical edges
-        im.color(cr,cg,cb,ca); im.vertex(x0, y0, z0); im.color(cr,cg,cb,ca); im.vertex(x0, y1, z0);
-        im.color(cr,cg,cb,ca); im.vertex(x1, y0, z0); im.color(cr,cg,cb,ca); im.vertex(x1, y1, z0);
-        im.color(cr,cg,cb,ca); im.vertex(x1, y0, z1); im.color(cr,cg,cb,ca); im.vertex(x1, y1, z1);
-        im.color(cr,cg,cb,ca); im.vertex(x0, y0, z1); im.color(cr,cg,cb,ca); im.vertex(x0, y1, z1);
+        imLines.color(cr,cg,cb,ca); imLines.vertex(x0, y0, z0); imLines.color(cr,cg,cb,ca); imLines.vertex(x0, y1, z0);
+        imLines.color(cr,cg,cb,ca); imLines.vertex(x1, y0, z0); imLines.color(cr,cg,cb,ca); imLines.vertex(x1, y1, z0);
+        imLines.color(cr,cg,cb,ca); imLines.vertex(x1, y0, z1); imLines.color(cr,cg,cb,ca); imLines.vertex(x1, y1, z1);
+        imLines.color(cr,cg,cb,ca); imLines.vertex(x0, y0, z1); imLines.color(cr,cg,cb,ca); imLines.vertex(x0, y1, z1);
       }
-      im.end();
+      imLines.end();
     }
     Gdx.gl.glDisable(GL20.GL_BLEND);
   }
