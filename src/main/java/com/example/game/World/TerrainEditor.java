@@ -85,14 +85,17 @@ public class TerrainEditor {
     boolean changed = false; Index p = new Index(); Index[] ns = {new Index(),new Index(),new Index(),new Index(),new Index(),new Index(),new Index(),new Index()};
     final int S = w.S;
     final float yScale = w.yScale;
-    final float r2 = (float)radius * radius;
-    // Map steepness [0..1] to exponent k in depth profile f = (1 - r)^k
+    // Map steepness [0..1] to exponent k in depth profile f = (1 - r)^k (sharper as steepness increases)
     final float k = 1.0f + 4.0f * clamp01(steepness);
 
-    for (int dz = -radius; dz <= radius; dz++) {
-      for (int dx = -radius; dx <= radius; dx++) {
-        float d2 = (float)dx * dx + (float)dz * dz;
-        if (d2 > r2) continue;
+    // 4x4 rotated-grid supersampling per cell with per-cell deterministic jitter (AA edges)
+    final float ROT = 0.463647609f; // ~26.565°, tan=0.5
+    final float CS = (float)Math.cos(ROT);
+    final float SN = (float)Math.sin(ROT);
+
+    int R = radius + 1; // expand bounds to capture partial coverage near edges
+    for (int dz = -R; dz <= R; dz++) {
+      for (int dx = -R; dx <= R; dx++) {
         int gxi = gx + dx, gzi = gz + dz;
         if (!primaryIndex(gxi, gzi, p)) continue;
         TerrainChunk tc = get(p.cx, p.cz); if (tc == null) continue;
@@ -101,9 +104,28 @@ public class TerrainEditor {
         int idx = p.lz * S + p.lx;
         short base = baseArr != null ? baseArr[idx] : arr[idx];
 
-        // radial factor 0 at edge, 1 at center
-        float rNorm = (float)Math.sqrt(d2) / (float)radius;
-        float f = (float)Math.pow(Math.max(0f, 1f - rNorm), k);
+        // Supersample inside the cell area (4x4) and average profile weight
+        int h = hash32(gxi, gzi);
+        float fSum = 0f;
+        for (int sIdx = 0; sIdx < 16; ++sIdx) {
+          int sxi = sIdx & 3; int szi = sIdx >> 2; // 0..3
+          // center samples in [-0.5,0.5) with slight jitter per sub-sample
+          float ox = ((sxi + rand01(h + sIdx*73)) - 1.5f) * 0.5f;
+          float oz = ((szi + rand01(h + sIdx*91)) - 1.5f) * 0.5f;
+          // rotate the sample pattern to avoid grid alignment artifacts
+          float rx = ox * CS - oz * SN;
+          float rz = ox * SN + oz * CS;
+          float px = dx + rx;
+          float pz = dz + rz;
+          float rr = (float)Math.sqrt(px*px + pz*pz) / (float)radius;
+          if (rr >= 1f) continue; // outside brush
+          float fs = (float)Math.pow(Math.max(0f, 1f - rr), k);
+          fSum += fs;
+        }
+
+        float f = fSum * (1f/16f);
+        if (f <= 0f) continue; // no coverage
+
         float targetMeters = base * yScale - maxDepthMeters * f;
         short targetShort = (short)Math.round(targetMeters / yScale);
 

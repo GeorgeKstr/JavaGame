@@ -16,9 +16,10 @@ public class TerrainSpline {
   // visual/emit properties (basic; extend later or move to per-type)
   public float width = 6f;       // meters (road half-width ~ width/2)
   public float riverDepth = 2f;  // meters
-  public float bankFalloff = 0.5f; // 0..1
+  public float bankFalloff = 0f; // 0..1 (0=round bowl, 1=sharper)
   public int textureId = 0;      // index into Splines texture list (separate from ground textures)
-  public float transparency = 0.8f; // 0..1 alpha multiplier for ribbon rendering
+  public float transparency = 1.0f; // 0..1 alpha multiplier for ribbon rendering
+  public float heightOffset = 0f;   // meters; rendering-only vertical offset for ribbon
 
   public TerrainSpline(Type type) { this.type = type; }
   public Type getType() { return type; }

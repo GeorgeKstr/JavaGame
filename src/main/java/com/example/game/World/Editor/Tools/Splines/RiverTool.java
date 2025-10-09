@@ -37,6 +37,9 @@ public final class RiverTool implements Tool {
   private Slider depthSlider; private Label depthLabel;
   private Slider steepSlider; private Label steepLabel;
   private TerrainSpline lastBoundForUI;
+  // Newly tracked so values update when selection changes
+  private Slider alphaSliderRef; private Label alphaLabelRef;
+  private Slider hOffSliderRef; private Label hOffLabelRef;
   private com.badlogic.gdx.scenes.scene2d.ui.List<String> nodeList;
 
   public RiverTool(SplinesLayer layer, TerrainSystem terrain) {
@@ -106,14 +109,25 @@ public final class RiverTool implements Tool {
 
     // Transparency slider (alpha multiplier 0..1)
     Table at = new Table();
-    final Label alphaLbl = new Label("Transparency: "+ (sel==null?"-":String.format("%.2f", sel.transparency)), skin);
-    final Slider alphaSlider = new Slider(0f, 1f, 0.01f, false, skin);
-    if (sel != null) alphaSlider.setValue(sel.transparency);
-    alphaSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
-      TerrainSpline s = layer.getSelectedSpline(); if (s==null || s.getType()!=TerrainSpline.Type.RIVER) return; s.transparency = alphaSlider.getValue(); alphaLbl.setText(String.format("Transparency: %.2f", s.transparency)); }});
-    at.add(alphaLbl).left().row();
-    at.add(alphaSlider).width(240).row();
+    alphaLabelRef = new Label("Transparency: "+ (sel==null?"-":String.format("%.2f", sel.transparency)), skin);
+    alphaSliderRef = new Slider(0f, 1f, 0.01f, false, skin);
+    if (sel != null) alphaSliderRef.setValue(sel.transparency);
+    alphaSliderRef.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+      TerrainSpline s = layer.getSelectedSpline(); if (s==null || s.getType()!=TerrainSpline.Type.RIVER) return; s.transparency = alphaSliderRef.getValue(); alphaLabelRef.setText(String.format("Transparency: %.2f", s.transparency)); }});
+    at.add(alphaLabelRef).left().row();
+    at.add(alphaSliderRef).width(240).row();
     container.add(at).left().padBottom(8).row();
+
+    // Height Offset slider (-5..+5 m) moves ribbon vertically at render time
+    Table ht = new Table();
+    hOffLabelRef = new Label("Height Offset: "+ (sel==null?"-":String.format("%.2f m", sel.heightOffset)), skin);
+    hOffSliderRef = new Slider(-5f, 5f, 0.01f, false, skin);
+    if (sel != null) hOffSliderRef.setValue(sel.heightOffset);
+    hOffSliderRef.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+      TerrainSpline s = layer.getSelectedSpline(); if (s==null || s.getType()!=TerrainSpline.Type.RIVER) return; s.heightOffset = hOffSliderRef.getValue(); hOffLabelRef.setText(String.format("Height Offset: %.2f m", s.heightOffset)); }});
+    ht.add(hOffLabelRef).left().row();
+    ht.add(hOffSliderRef).width(240).row();
+    container.add(ht).left().padBottom(8).row();
 
     // Texture select using the shared TextureBrowser (open in textures/splines)
     Table t = new Table();
@@ -167,8 +181,8 @@ public final class RiverTool implements Tool {
     // Bake button
     TextButton bake = new TextButton("Bake River Depth to Terrain", skin);
     bake.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
-      // Sample density: 8 per segment by default for decent coverage
-      terrain.bakeRiversDepth(layer.getSplines(), 8);
+      // Increased density: 12 samples per segment to reduce edge aliasing during baking
+      terrain.bakeRiversDepth(layer.getSplines(), 12);
       // After baking, rebuild all ribbons explicitly (event-driven)
       for (TerrainSpline s : layer.getSplines()) { s.markRibbonDirty(); s.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 8); }
     }});
@@ -236,6 +250,10 @@ public final class RiverTool implements Tool {
         if (widthSlider != null) { widthSlider.setValue(spline.width); widthLabel.setText(String.format("Width: %.1f m", spline.width)); }
         if (depthSlider != null) { depthSlider.setValue(spline.riverDepth); depthLabel.setText(String.format("Depth: %.1f m", spline.riverDepth)); }
         if (steepSlider != null) { steepSlider.setValue(spline.bankFalloff); steepLabel.setText(String.format("Steepness: %.2f", spline.bankFalloff)); }
+        if (alphaSliderRef != null) { alphaSliderRef.setValue(spline.transparency); }
+        if (alphaLabelRef != null) { alphaLabelRef.setText(String.format("Transparency: %.2f", spline.transparency)); }
+        if (hOffSliderRef != null) { hOffSliderRef.setValue(spline.heightOffset); }
+        if (hOffLabelRef != null) { hOffLabelRef.setText(String.format("Height Offset: %.2f m", spline.heightOffset)); }
         return;
       }
       // Ray-vs-AABB picking (ignores terrain); uses current mouse screen coords
@@ -251,6 +269,10 @@ public final class RiverTool implements Tool {
           if (widthSlider != null) { widthSlider.setValue(ssel.width); widthLabel.setText(String.format("Width: %.1f m", ssel.width)); }
           if (depthSlider != null) { depthSlider.setValue(ssel.riverDepth); depthLabel.setText(String.format("Depth: %.1f m", ssel.riverDepth)); }
           if (steepSlider != null) { steepSlider.setValue(ssel.bankFalloff); steepLabel.setText(String.format("Steepness: %.2f", ssel.bankFalloff)); }
+          if (alphaSliderRef != null) { alphaSliderRef.setValue(ssel.transparency); }
+          if (alphaLabelRef != null) { alphaLabelRef.setText(String.format("Transparency: %.2f", ssel.transparency)); }
+          if (hOffSliderRef != null) { hOffSliderRef.setValue(ssel.heightOffset); }
+          if (hOffLabelRef != null) { hOffLabelRef.setText(String.format("Height Offset: %.2f m", ssel.heightOffset)); }
         }
       }
       else { 
@@ -269,6 +291,19 @@ public final class RiverTool implements Tool {
   }
 
   @Override public void update(float dt, Camera cam) {
+    // Keep UI sliders in sync with current selection every frame
+    TerrainSpline cur = layer.getSelectedSpline();
+    if (cur != null && cur.getType() == TerrainSpline.Type.RIVER) {
+      if (alphaSliderRef != null && Math.abs(alphaSliderRef.getValue() - cur.transparency) > 1e-5f) {
+        alphaSliderRef.setValue(cur.transparency);
+        if (alphaLabelRef != null) alphaLabelRef.setText(String.format("Transparency: %.2f", cur.transparency));
+      }
+      if (hOffSliderRef != null && Math.abs(hOffSliderRef.getValue() - cur.heightOffset) > 1e-5f) {
+        hOffSliderRef.setValue(cur.heightOffset);
+        if (hOffLabelRef != null) hOffLabelRef.setText(String.format("Height Offset: %.2f m", cur.heightOffset));
+      }
+    }
+
     if (!dragging) return;
     TerrainSpline sel = layer.getSelectedSpline();
     int idx = layer.getSelectedNode();
@@ -317,7 +352,7 @@ public final class RiverTool implements Tool {
       float[] lx = s.getLX(), ly = s.getLY(), lz = s.getLZ();
       float[] rx = s.getRX(), ry = s.getRY(), rz = s.getRZ();
       int n = s.getTriPairs() + 1;
-      float yLift = 0.02f;
+      float yLift = s.heightOffset + 0.02f;
 
       // Draw in batches of segments to stay well within internal buffers
       int i = 0;
@@ -358,9 +393,10 @@ public final class RiverTool implements Tool {
       // Ensure overlays (centerline and node boxes) draw with solid color (no texturing)
       Gdx.gl.glBindTexture(GL20.GL_TEXTURE_2D, 0);
 
-      Gdx.gl.glDepthMask(true); 
-      Gdx.gl.glEnable(GL20.GL_DEPTH_TEST);
-      Gdx.gl.glEnable(GL20.GL_CULL_FACE);
+      // Draw overlays on top: no depth/cull so they are always visible
+      Gdx.gl.glDisable(GL20.GL_DEPTH_TEST);
+      Gdx.gl.glDisable(GL20.GL_CULL_FACE);
+      Gdx.gl.glLineWidth(2f);
 
       // Centerline poly for guidance (midpoints)
       float r = 0.08f, g = sel ? 0.5f : 0.5f, b = 1.0f;
@@ -418,6 +454,11 @@ public final class RiverTool implements Tool {
         imLines.color(cr,cg,cb,ca); imLines.vertex(x0, y0, z1); imLines.color(cr,cg,cb,ca); imLines.vertex(x0, y1, z1);
       }
       imLines.end();
+
+      // Restore state so subsequent splines render with depth/cull
+      Gdx.gl.glLineWidth(1f);
+      Gdx.gl.glEnable(GL20.GL_CULL_FACE);
+      Gdx.gl.glEnable(GL20.GL_DEPTH_TEST);
     }
     Gdx.gl.glDisable(GL20.GL_BLEND);
   }
