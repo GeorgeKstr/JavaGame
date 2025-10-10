@@ -112,11 +112,11 @@ public final class RiverTool implements Tool {
 
     // Ribbon Width Ratio slider (scales visual ribbon width vs river width)
     Table rrt = new Table();
-    ribbonRatioLabel = new Label("Ribbon Width Ratio: "+ (sel==null?"-":String.format("%.2f", sel.ribbonWidthRatio)), skin);
+    ribbonRatioLabel = new Label("Ribbon overflow: "+ (sel==null?"-":String.format("%.2f", sel.ribbonWidthRatio)), skin);
     ribbonRatioSlider = new Slider(0.25f, 3.0f, 0.01f, false, skin);
     if (sel != null) ribbonRatioSlider.setValue(sel.ribbonWidthRatio);
     ribbonRatioSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
-      TerrainSpline s = layer.getSelectedSpline(); if (s==null || s.getType()!=TerrainSpline.Type.RIVER) return; s.ribbonWidthRatio = ribbonRatioSlider.getValue(); ribbonRatioLabel.setText(String.format("Ribbon Width Ratio: %.2f", s.ribbonWidthRatio)); }});
+      TerrainSpline s = layer.getSelectedSpline(); if (s==null || s.getType()!=TerrainSpline.Type.RIVER) return; s.ribbonWidthRatio = ribbonRatioSlider.getValue(); ribbonRatioLabel.setText(String.format("Ribbon overflow: %.2f", s.ribbonWidthRatio)); }});
     rrt.add(ribbonRatioLabel).left().row();
     rrt.add(ribbonRatioSlider).width(240).row();
     container.add(rrt).left().padBottom(8).row();
@@ -281,7 +281,7 @@ public final class RiverTool implements Tool {
         if (hOffSliderRef != null) { hOffSliderRef.setValue(spline.heightOffset); }
         if (hOffLabelRef != null) { hOffLabelRef.setText(String.format("Height Offset: %.2f m", spline.heightOffset)); }
         if (ribbonRatioSlider != null) { ribbonRatioSlider.setValue(spline.ribbonWidthRatio); }
-        if (ribbonRatioLabel != null) { ribbonRatioLabel.setText(String.format("Ribbon Width Ratio: %.2f", spline.ribbonWidthRatio)); }
+        if (ribbonRatioLabel != null) { ribbonRatioLabel.setText(String.format("Ribbon overflow: %.2f", spline.ribbonWidthRatio)); }
         if (texturedCBRef != null) texturedCBRef.setChecked(spline.textured);
         if (selectTexBtnRef != null) selectTexBtnRef.setDisabled(!spline.textured);
         if (texLabelRef != null) texLabelRef.setText("Texture: " + currentTextureLabel(spline));
@@ -305,7 +305,7 @@ public final class RiverTool implements Tool {
           if (hOffSliderRef != null) { hOffSliderRef.setValue(ssel.heightOffset); }
           if (hOffLabelRef != null) { hOffLabelRef.setText(String.format("Height Offset: %.2f m", ssel.heightOffset)); }
           if (ribbonRatioSlider != null) { ribbonRatioSlider.setValue(ssel.ribbonWidthRatio); }
-          if (ribbonRatioLabel != null) { ribbonRatioLabel.setText(String.format("Ribbon Width Ratio: %.2f", ssel.ribbonWidthRatio)); }
+          if (ribbonRatioLabel != null) { ribbonRatioLabel.setText(String.format("Ribbon overflow: %.2f", ssel.ribbonWidthRatio)); }
           if (texturedCBRef != null) texturedCBRef.setChecked(ssel.textured);
           if (selectTexBtnRef != null) selectTexBtnRef.setDisabled(!ssel.textured);
           if (texLabelRef != null) texLabelRef.setText("Texture: " + currentTextureLabel(ssel));
@@ -340,7 +340,7 @@ public final class RiverTool implements Tool {
       }
       if (ribbonRatioSlider != null && Math.abs(ribbonRatioSlider.getValue() - cur.ribbonWidthRatio) > 1e-4f) {
         ribbonRatioSlider.setValue(cur.ribbonWidthRatio);
-        if (ribbonRatioLabel != null) ribbonRatioLabel.setText(String.format("Ribbon Width Ratio: %.2f", cur.ribbonWidthRatio));
+        if (ribbonRatioLabel != null) ribbonRatioLabel.setText(String.format("Ribbon overflow: %.2f", cur.ribbonWidthRatio));
       }
       // Sync textured checkbox and enforce textureId=0 when untextured
       if (texturedCBRef != null && texturedCBRef.isChecked() != cur.textured) {

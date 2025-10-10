@@ -49,8 +49,12 @@ public class SkinFactory {
     skin.add("btn-down", tinted(whiteTex, btnDown), Drawable.class);
     skin.add("bg",       tinted(whiteTex, bgCol),   Drawable.class);
 
-    skin.add("cb-off",   rounded(whiteTex, cbOff),  Drawable.class);
-    skin.add("cb-on",    rounded(whiteTex, cbOn),   Drawable.class);
+    NinePatchDrawable cbOffDr = rounded(whiteTex, cbOff);
+    NinePatchDrawable cbOnDr  = rounded(whiteTex, cbOn);
+    cbOffDr.setMinWidth(18f); cbOffDr.setMinHeight(18f);
+    cbOnDr.setMinWidth(18f);  cbOnDr.setMinHeight(18f);
+    skin.add("cb-off", cbOffDr, Drawable.class);
+    skin.add("cb-on",  cbOnDr,  Drawable.class);
 
     // scrollbars
     skin.add("scroll",       tinted(whiteTex, scrollTrack), Drawable.class);
@@ -104,6 +108,8 @@ public class SkinFactory {
     cbs.checkboxOn  = skin.getDrawable("cb-on");
     cbs.font = font;
     cbs.fontColor = Color.WHITE;
+    // Slight background when hovered (optional)
+    cbs.over = skin.getDrawable("btn-over");
     skin.add("default", cbs);
 
     // ---- ScrollPane style ----

@@ -75,6 +75,23 @@ public final class EditorHUD implements Disposable {
     ScrollPane leftScroll = new ScrollPane(leftPane, skin);
     leftScroll.setFadeScrollBars(false);
     leftScroll.setScrollingDisabled(true, false);
+    leftScroll.setFlickScroll(false); // disable kinetic scroll/drag feel
+    // Capture drag to prevent drag-based scrolling; wheel scroll still works
+    leftScroll.addCaptureListener(new InputListener(){
+      @Override public void touchDragged(InputEvent event, float x, float y, int pointer) {
+        event.stop(); // consume drag so ScrollPane doesn't pan on drag
+      }
+    });
+    // Only capture scroll when hovered: manage scroll focus explicitly
+    leftScroll.addListener(new InputListener() {
+      @Override public void enter(InputEvent event, float x, float y, int pointer, Actor fromActor) {
+        stage.setScrollFocus(leftScroll);
+      }
+      @Override public void exit(InputEvent event, float x, float y, int pointer, Actor toActor) {
+        // Clear scroll focus when mouse leaves the scroll pane area
+        if (stage.getScrollFocus() == leftScroll) stage.setScrollFocus(null);
+      }
+    });
 
     // --- right controls
     rightPane.clear(); rightPane.top().right().pad(8);

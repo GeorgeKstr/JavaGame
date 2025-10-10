@@ -135,7 +135,9 @@ public class EditorScreen implements Screen {
 
     // Input
     inputRouter = EditorBootstrap.inputRouter(layers, edCam, cam, terrain);
-    Gdx.input.setInputProcessor(new InputMultiplexer(hud.stage(), inputRouter));
+    // Route input based on focus/hover: Stage first when over/focused; otherwise camera/tools first
+    com.example.game.UI.Editor.StageAwareInputRouter router = new com.example.game.UI.Editor.StageAwareInputRouter(hud.stage(), inputRouter);
+    Gdx.input.setInputProcessor(router);
   }
 
 
