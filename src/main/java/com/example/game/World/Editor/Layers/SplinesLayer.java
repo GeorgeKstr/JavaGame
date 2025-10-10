@@ -49,15 +49,12 @@ public final class SplinesLayer extends BaseToolLayer {
     for (TerrainSpline s : splines) {
       if (s.getType() != TerrainSpline.Type.RIVER) continue;
       if (!s.hasRibbon()) continue;
+      // Only render textured ribbons here. Non-textured (helper) ribbons are shown exclusively in RiverTool.
+      if (!s.textured) continue;
       float aa = Math.max(0f, Math.min(1f, s.transparency));
-      com.badlogic.gdx.graphics.Texture tex = (s.textured ? getSplineTexture(s.textureId) : null);
+      com.badlogic.gdx.graphics.Texture tex = getSplineTexture(s.textureId);
       float rr, gg, bb;
-      if (tex != null) {
-        float[] sunTint = computeSunTint(); rr = sunTint[0]; gg = sunTint[1]; bb = sunTint[2];
-      } else {
-        // Helper ribbon color similar to overlays (light blue)
-        rr = 0.08f; gg = 0.50f; bb = 1.00f;
-      }
+      float[] sunTint = computeSunTint(); rr = sunTint[0]; gg = sunTint[1]; bb = sunTint[2];
 
       float[] lx = s.getLX(), ly = s.getLY(), lz = s.getLZ();
       float[] rx = s.getRX(), ry = s.getRY(), rz = s.getRZ();
@@ -95,32 +92,6 @@ public final class SplinesLayer extends BaseToolLayer {
             vLen = v2;
           }
           im.end();
-        } else {
-          com.badlogic.gdx.Gdx.gl.glActiveTexture(com.badlogic.gdx.graphics.GL20.GL_TEXTURE0);
-          com.badlogic.gdx.Gdx.gl.glBindTexture(com.badlogic.gdx.graphics.GL20.GL_TEXTURE_2D, 0);
-          imSolid.begin(cam.combined, com.badlogic.gdx.graphics.GL20.GL_TRIANGLES);
-          for (int k = i; k < end; k++) {
-            float clx0 = 0.5f * (lx[k] + rx[k]);
-            float clz0 = 0.5f * (lz[k] + rz[k]);
-            float clx1 = 0.5f * (lx[k+1] + rx[k+1]);
-            float clz1 = 0.5f * (lz[k+1] + rz[k+1]);
-            float ax = clx0, az = clz0;
-            float bx = clx1, bz = clz1;
-            float du = (float)Math.sqrt((bx-ax)*(bx-ax) + (bz-az)*(bz-az));
-            float v2 = vLen + du / Math.max(0.1f, s.width);
-            float nlx0 = ax + (lx[k]   - ax) * ratio; float nlz0 = az + (lz[k]   - az) * ratio;
-            float nrx0 = ax + (rx[k]   - ax) * ratio; float nrz0 = az + (rz[k]   - az) * ratio;
-            float nlx1 = bx + (lx[k+1] - bx) * ratio; float nlz1 = bz + (lz[k+1] - bz) * ratio;
-            float nrx1 = bx + (rx[k+1] - bx) * ratio; float nrz1 = bz + (rz[k+1] - bz) * ratio;
-            imSolid.color(rr,gg,bb,aa); imSolid.vertex(nlx0, ly[k]   +yLift, nlz0);
-            imSolid.color(rr,gg,bb,aa); imSolid.vertex(nrx0, ry[k]   +yLift, nrz0);
-            imSolid.color(rr,gg,bb,aa); imSolid.vertex(nlx1, ly[k+1] +yLift, nlz1);
-            imSolid.color(rr,gg,bb,aa); imSolid.vertex(nrx0, ry[k]   +yLift, nrz0);
-            imSolid.color(rr,gg,bb,aa); imSolid.vertex(nrx1, ry[k+1] +yLift, nrz1);
-            imSolid.color(rr,gg,bb,aa); imSolid.vertex(nlx1, ly[k+1] +yLift, nlz1);
-            vLen = v2;
-          }
-          imSolid.end();
         }
         i = end;
         cumV += vLen;

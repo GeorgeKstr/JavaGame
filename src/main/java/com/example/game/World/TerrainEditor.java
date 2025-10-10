@@ -167,11 +167,20 @@ public class TerrainEditor {
       if (!primaryIndex(gxi,gzi,p)) continue;
       TerrainChunk tc=get(p.cx,p.cz); if (tc==null) continue;
       short[] arr=tc.getHeightsArray(); int idx=p.lz*w.S+p.lx; short b=arr[idx], a=(short)(b+delta);
-      if (a!=b){ arr[idx]=a; tc.setDirty(true); changed=true; }
+      if (a!=b){
+        arr[idx]=a;
+        // Mirror into baseline so baseline tracks editor changes (persistent terrain)
+        short[] base=tc.getBaselineArray(); if (base!=null) base[idx]=a; else tc.ensureBaseline();
+        tc.setDirty(true); changed=true;
+      }
       int ncount=neighborsForSample(p,ns);
       for(int i=0;i<ncount;i++){ TerrainChunk nb=get(ns[i].cx,ns[i].cz); if(nb==null)continue;
         short[] harr=nb.getHeightsArray(); int nidx=ns[i].lz*w.S+ns[i].lx; short bb=harr[nidx], aa=(short)(bb+delta);
-        if(aa!=bb){ harr[nidx]=aa; nb.setDirty(true); }
+        if(aa!=bb){
+          harr[nidx]=aa;
+          short[] bArr=nb.getBaselineArray(); if (bArr!=null) bArr[nidx]=aa; else nb.ensureBaseline();
+          nb.setDirty(true);
+        }
       }
     }
     return changed;
@@ -210,6 +219,7 @@ public class TerrainEditor {
 
         if (b != 0) {
           arr[idx] = 0;
+          short[] base = tc.getBaselineArray(); if (base!=null) base[idx]=0; else tc.ensureBaseline();
           tc.setDirty(true);
           changed = true;
 
@@ -219,7 +229,11 @@ public class TerrainEditor {
             TerrainChunk nb = get(ns[i].cx, ns[i].cz); if (nb == null) continue;
             short[] harr = nb.getHeightsArray();
             int nidx = ns[i].lz * S + ns[i].lx;
-            if (harr[nidx] != 0) { harr[nidx] = 0; nb.setDirty(true); }
+            if (harr[nidx] != 0) {
+              harr[nidx] = 0;
+              short[] bArr = nb.getBaselineArray(); if (bArr!=null) bArr[nidx]=0; else nb.ensureBaseline();
+              nb.setDirty(true);
+            }
           }
         }
       }
@@ -295,7 +309,9 @@ public class TerrainEditor {
         short a = (short)Math.max(Short.MIN_VALUE, Math.min(Short.MAX_VALUE, Math.round(nf)));
 
         if (a != b) {
-          arr[idx] = a; tc.setDirty(true); changed = true;
+          arr[idx] = a;
+          short[] base = tc.getBaselineArray(); if (base!=null) base[idx]=a; else tc.ensureBaseline();
+          tc.setDirty(true); changed = true;
 
           // Mirror exact value to shared edge/corner samples to avoid cracks
           int ncount = neighborsForSample(p, ns);
@@ -303,7 +319,11 @@ public class TerrainEditor {
             TerrainChunk nb = get(ns[i].cx, ns[i].cz); if (nb == null) continue;
             short[] harr = nb.getHeightsArray();
             int nidx = ns[i].lz * S + ns[i].lx;
-            if (harr[nidx] != a) { harr[nidx] = a; nb.setDirty(true); }
+            if (harr[nidx] != a) {
+              harr[nidx] = a;
+              short[] bArr = nb.getBaselineArray(); if (bArr!=null) bArr[nidx]=a; else nb.ensureBaseline();
+              nb.setDirty(true);
+            }
           }
         }
       }

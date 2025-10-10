@@ -89,7 +89,7 @@ public final class RiverTool implements Tool {
     widthSlider = new Slider(1f, 50f, 0.5f, false, skin);
     if (sel != null) widthSlider.setValue(sel.width);
     widthSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
-      TerrainSpline s = layer.getSelectedSpline(); if (s==null) return; s.width = widthSlider.getValue(); s.markRibbonDirty(); s.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 8); widthLabel.setText(String.format("Width: %.1f m", s.width)); }});
+      TerrainSpline s = layer.getSelectedSpline(); if (s==null) return; s.width = widthSlider.getValue(); s.markRibbonDirty(); s.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 4); widthLabel.setText(String.format("Width: %.1f m", s.width)); }});
     wtbl.add(widthLabel).left().row();
     wtbl.add(widthSlider).width(240).row();
     container.add(wtbl).left().padBottom(8).row();
@@ -99,7 +99,7 @@ public final class RiverTool implements Tool {
     depthSlider = new Slider(0f, 20f, 0.1f, false, skin);
     if (sel != null) depthSlider.setValue(sel.riverDepth);
     depthSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
-      TerrainSpline s = layer.getSelectedSpline(); if (s==null || s.getType()!=TerrainSpline.Type.RIVER) return; s.riverDepth = depthSlider.getValue(); s.markRibbonDirty(); s.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 8); depthLabel.setText(String.format("Depth: %.1f m", s.riverDepth)); }});
+      TerrainSpline s = layer.getSelectedSpline(); if (s==null || s.getType()!=TerrainSpline.Type.RIVER) return; s.riverDepth = depthSlider.getValue(); s.markRibbonDirty(); s.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 4); depthLabel.setText(String.format("Depth: %.1f m", s.riverDepth)); }});
     dt.add(depthLabel).left().row();
     dt.add(depthSlider).width(240).row();
     container.add(dt).left().padBottom(8).row();
@@ -110,7 +110,7 @@ public final class RiverTool implements Tool {
     steepSlider = new Slider(0f, 1f, 0.01f, false, skin);
     if (sel != null) steepSlider.setValue(sel.bankFalloff);
     steepSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
-      TerrainSpline s = layer.getSelectedSpline(); if (s==null || s.getType()!=TerrainSpline.Type.RIVER) return; s.bankFalloff = steepSlider.getValue(); s.markRibbonDirty(); s.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 8); steepLabel.setText(String.format("Steepness: %.2f", s.bankFalloff)); }});
+      TerrainSpline s = layer.getSelectedSpline(); if (s==null || s.getType()!=TerrainSpline.Type.RIVER) return; s.bankFalloff = steepSlider.getValue(); s.markRibbonDirty(); s.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 4); steepLabel.setText(String.format("Steepness: %.2f", s.bankFalloff)); }});
     st.add(steepLabel).left().row();
     st.add(steepSlider).width(240).row();
     container.add(st).left().padBottom(8).row();
@@ -204,7 +204,7 @@ public final class RiverTool implements Tool {
       int newSel = Math.min(idx, cur.size()-1);
       layer.select(cur, newSel);
       if (nodeList != null) { nodeList.setItems(buildNodeLabels(cur)); if (newSel >= 0) nodeList.setSelectedIndex(newSel); }
-      cur.markRibbonDirty(); cur.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 8);
+      cur.markRibbonDirty(); cur.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 4);
     }});
     lt.add(del).left().padTop(6);
     container.add(lt).left().row();
@@ -218,7 +218,7 @@ public final class RiverTool implements Tool {
       // Force reload so current area reflects baked heights
       terrain.reloadAllChunks();
       // Rebuild ribbons after geometry changes
-      for (TerrainSpline s : layer.getSplines()) { s.markRibbonDirty(); s.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 8); }
+      for (TerrainSpline s : layer.getSplines()) { s.markRibbonDirty(); s.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 4); }
     }});
     container.add(bake).left().padTop(8).row();
   }
@@ -237,7 +237,7 @@ public final class RiverTool implements Tool {
           spline.addNode(new TerrainSplineNode(world.x, y, world.z));
           layer.select(spline, spline.size()-1);
           spline.markRibbonDirty();
-          spline.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 8);
+          spline.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 4);
           if (nodeList != null) nodeList.setItems(buildNodeLabels(spline)); nodeList.setSelectedIndex(spline.size()-1);
           if (widthSlider != null) { widthSlider.setValue(spline.width); widthLabel.setText(String.format("Width: %.1f m", spline.width)); }
           if (depthSlider != null) { depthSlider.setValue(spline.riverDepth); depthLabel.setText(String.format("Depth: %.1f m", spline.riverDepth)); }
@@ -375,7 +375,7 @@ public final class RiverTool implements Tool {
     sel.setNodePos(idx, new Vector3(hit.x, hit.y + 0.05f, hit.z));
     // Throttled by TerrainSpline.rebuildRibbonAsync internal timer
     sel.markRibbonDirty();
-    sel.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 8);
+    sel.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 4);
     if (nodeList != null) { nodeList.setItems(buildNodeLabels(sel)); nodeList.setSelectedIndex(idx); }
   }
 
@@ -384,7 +384,7 @@ public final class RiverTool implements Tool {
       TerrainSpline sel = layer.getSelectedSpline();
       if (sel != null && sel.getType() == TerrainSpline.Type.RIVER) {
         sel.markRibbonDirty();
-        sel.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 8);
+        sel.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 4);
       }
     }
     dragging = false;

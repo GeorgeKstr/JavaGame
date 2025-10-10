@@ -40,7 +40,10 @@ final class TerrainIO {
       int cx = Math.round(c.getOriginX() / ((w.S - 1) * w.tile));
       int cz = Math.round(c.getOriginZ() / ((w.S - 1) * w.tile));
       try {
-        out.put(cx + "_" + cz + ".hmx", SparseChunkWriter.encodeToBytes(w.S, c.getHeightsArray(), c.getTexId0Array(), c.getTexId1Array(), c.getTexId2Array(), c.getTexW0Array(), c.getTexW1Array(), c.getTexW2Array()));
+        // Save baseline (pre-bake) heights so rivers remain runtime offsets. If no baseline exists yet, fallback to current heights.
+        short[] base = c.getBaselineArray();
+        short[] toWrite = (base != null && base.length == w.S * w.S) ? base : c.getHeightsArray();
+        out.put(cx + "_" + cz + ".hmx", SparseChunkWriter.encodeToBytes(w.S, toWrite, c.getTexId0Array(), c.getTexId1Array(), c.getTexId2Array(), c.getTexW0Array(), c.getTexW1Array(), c.getTexW2Array()));
       } catch (IOException ex) {
         throw new RuntimeException("Encode failed " + cx + "," + cz, ex);
       }
