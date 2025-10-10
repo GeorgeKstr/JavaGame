@@ -86,11 +86,17 @@ final class TerrainStreamer {
           Arrays.fill(w0, (byte)255);
           // id1/id2/w1/w2 left at 0
 
-          // NOTE: Extend TerrainWorld.Result to accept the six arrays:
-          // new TerrainWorld.Result(int k, float ox, float oz,
-          //   short[] h, byte[] id0, byte[] id1, byte[] id2, byte[] w0, byte[] w1, byte[] w2,
-          //   boolean defaultFlat, Throwable err)
-          w.completed.add(new TerrainWorld.Result(k, ox, oz, h, id0, id1, id2, w0, w1, w2, true, null));
+          // Preserve a baseline copy before post-process (original terrain)
+          short[] baseH = java.util.Arrays.copyOf(h, h.length);
+
+          // Optional background post-process (e.g., rivers bake) before passing to render thread
+          if (w.chunkPost != null) {
+            int cx2 = (int)Math.floor(ox / ((w.S - 1) * w.tile));
+            int cz2 = (int)Math.floor(oz / ((w.S - 1) * w.tile));
+            try { w.chunkPost.processChunk(cx2, cz2, ox, oz, h, baseH, w.S, w.tile, w.yScale); } catch (Throwable ignored) {}
+          }
+
+          w.completed.add(new TerrainWorld.Result(k, ox, oz, h, baseH, id0, id1, id2, w0, w1, w2, true, null));
           return;
         }
 
@@ -124,11 +130,21 @@ final class TerrainStreamer {
           Arrays.fill(w0, (byte)255);
         }
 
-        w.completed.add(new TerrainWorld.Result(k, ox, oz, h, id0, id1, id2, w0, w1, w2, false, null));
+        // Preserve a baseline copy before post-process (original terrain)
+        short[] baseH = java.util.Arrays.copyOf(h, h.length);
+
+        // Optional background post-process (e.g., rivers bake) before passing to render thread
+        if (w.chunkPost != null) {
+          int cx2 = (int)Math.floor(ox / ((w.S - 1) * w.tile));
+          int cz2 = (int)Math.floor(oz / ((w.S - 1) * w.tile));
+          try { w.chunkPost.processChunk(cx2, cz2, ox, oz, h, baseH, w.S, w.tile, w.yScale); } catch (Throwable ignored) {}
+        }
+
+        w.completed.add(new TerrainWorld.Result(k, ox, oz, h, baseH, id0, id1, id2, w0, w1, w2, false, null));
 
       } catch (Throwable ex) {
         // Pass null arrays to signal failure
-        w.completed.add(new TerrainWorld.Result(k, ox, oz, null, null, null, null, null, null, null, false, ex));
+        w.completed.add(new TerrainWorld.Result(k, ox, oz, null, null, null, null, null, null, null, null, false, ex));
       }
     });
   }
@@ -147,10 +163,14 @@ final class TerrainStreamer {
           w.S, w.tile, w.yScale, r.ox, r.oz,
           r.h, r.id0, r.id1, r.id2, r.w0, r.w1, r.w2
       );
+      // Install baseline so tools/ribbons can sample original terrain
+      if (r.baseH != null) tc.setBaselineHeights(r.baseH);
 
       tc.buildLods(w.MAX_LOD);
       w.chunks.put(r.k, tc);
       if (r.defaultFlat) w.defaultFlatChunks.add(r.k); else w.defaultFlatChunks.remove(r.k);
+      // Notify listeners (render thread) that chunks changed so tools/ribbons can resample
+      if (w.onChunksChanged != null) try { w.onChunksChanged.run(); } catch (Throwable ignored) {}
     }
   }
 

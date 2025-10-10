@@ -2,8 +2,6 @@ package com.example.game.World;
 
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.graphics.Camera;
-import com.badlogic.gdx.math.Vector3;
-import com.badlogic.gdx.math.collision.Ray;
 import com.example.game.Render.SimpleShader;
 
 import java.util.Map;
@@ -43,6 +41,129 @@ public class TerrainSystem implements HeightSampler {
     this.renderer = new TerrainRenderer(world, lod);
     this.io       = new TerrainIO(world);
     this.picking  = new TerrainPicking(world);
+  }
+
+  /** Set a callback invoked on the render thread after chunks have changed (load/unload). */
+  public void onChunksChanged(Runnable r) { world.onChunksChanged = r; }
+
+  // ---------------- Concrete post-processor: River baker ----------------
+  /** Thread-safe snapshot baker that stamps river depths into chunk height arrays. */
+  public static class RiverBakePostProcessor implements ChunkHeightPostProcessor {
+    private final java.util.List<com.example.game.World.Splines.TerrainSpline> rivers;
+    private final int samplesPerSegment;
+
+    public RiverBakePostProcessor(java.util.List<com.example.game.World.Splines.TerrainSpline> source, int samplesPerSegment) {
+      // Snapshot list to avoid mutation during background processing
+      this.rivers = new java.util.ArrayList<>(source != null ? source : java.util.Collections.emptyList());
+      this.samplesPerSegment = Math.max(2, samplesPerSegment);
+    }
+
+    @Override
+    public void processChunk(int cx, int cz, float originX, float originZ,
+                             short[] heights, short[] baseHeights,
+                             int S, float tile, float yScale) {
+      if (heights == null || rivers.isEmpty()) return;
+      if (baseHeights == null || baseHeights.length != heights.length) return; // must have baseline
+      final int cellsPerChunk = S - 1;
+      final float chunkSize = cellsPerChunk * tile;
+
+      // Precompute chunk AABB in world XZ
+      final float minX = originX, minZ = originZ;
+      final float maxX = originX + chunkSize, maxZ = originZ + chunkSize;
+
+      for (com.example.game.World.Splines.TerrainSpline s : rivers) {
+        if (s == null || s.getType() != com.example.game.World.Splines.TerrainSpline.Type.RIVER) continue;
+        if (s.riverDepth <= 0f || s.width <= 0.01f) continue;
+
+        java.util.List<com.badlogic.gdx.math.Vector3> pts = s.samplePositions(samplesPerSegment);
+        if (pts == null || pts.size() < 2) continue;
+
+        int radiusCells = Math.max(1, Math.round((s.width * 0.5f) / tile));
+
+        // Capsule-like coverage: step along each segment with spacing ~tile*0.5 to avoid gaps
+        for (int i = 0; i < pts.size() - 1; i++) {
+          com.badlogic.gdx.math.Vector3 a = pts.get(i);
+          com.badlogic.gdx.math.Vector3 b = pts.get(i + 1);
+          float dx = b.x - a.x, dz = b.z - a.z;
+          float len = (float)Math.sqrt(dx*dx + dz*dz);
+          int steps = Math.max(1, Math.round(len / (tile * 0.5f)));
+          for (int u = 0; u <= steps; u++) {
+            float tlin = (steps == 0) ? 0f : (u / (float)steps);
+            float px = a.x + dx * tlin;
+            float pz = a.z + dz * tlin;
+            // Quick reject if outside chunk AABB expanded by radius
+            float rMeters = radiusCells * tile;
+            if (px < minX - rMeters || px > maxX + rMeters || pz < minZ - rMeters || pz > maxZ + rMeters)
+              continue;
+            int gx = Math.round((px - originX) / tile);
+            int gz = Math.round((pz - originZ) / tile);
+            stampCircle(heights, baseHeights, S, gx, gz, radiusCells, s.riverDepth, s.bankFalloff, yScale);
+          }
+        }
+      }
+    }
+
+    private static void stampCircle(short[] h, short[] base, int S, int cx, int cz, int radCells, float depthMeters, float falloff01, float yScale) {
+      if (h == null) return;
+      int r = Math.max(1, radCells);
+      int x0 = Math.max(0, cx - r), x1 = Math.min(S - 1, cx + r);
+      int z0 = Math.max(0, cz - r), z1 = Math.min(S - 1, cz + r);
+      float rInv = 1f / (r + 1e-6f);
+      // Smooth profile using smoothstep; blend towards sharper exponential with falloff
+      float ff = Math.max(0f, Math.min(1f, falloff01));
+      float exp = 1.5f + 3.5f * ff; // 1.5..5.0
+      float units = depthMeters / Math.max(1e-6f, yScale);
+      for (int z = z0; z <= z1; z++) {
+        int dz = z - cz;
+        for (int x = x0; x <= x1; x++) {
+          int dx = x - cx;
+          float d = (float)Math.sqrt(dx*dx + dz*dz);
+          if (d > r) continue;
+          float t = d * rInv; // 0 center .. 1 at radius
+          float s = Math.max(0f, Math.min(1f, t));
+          float smooth = s*s*(3f - 2f*s); // smoothstep
+          float profBase = 1f - smooth;   // gentle center-to-edge falloff
+          float profSharp = (float)Math.pow(1f - s, exp);
+          float prof = profBase * (1f - ff) + profSharp * ff;
+          int idx = z * S + x;
+          int b = base[idx];
+          int delta = Math.round(units * prof);
+          int vCandidate = b - delta; // exact meters below baseline
+          // Take MIN against current h to achieve max-depth across stamps without accumulating
+          int v = Math.min(h[idx], vCandidate);
+          if (v < Short.MIN_VALUE) v = Short.MIN_VALUE; else if (v > Short.MAX_VALUE) v = Short.MAX_VALUE;
+          h[idx] = (short)v;
+        }
+      }
+    }
+  }
+
+  /** Convenience: install a river bake post-processor computed from current rivers. */
+  public void installRiverBake(java.util.List<com.example.game.World.Splines.TerrainSpline> rivers, int samplesPerSegment) {
+    setChunkHeightPostProcessor(new RiverBakePostProcessor(rivers, samplesPerSegment));
+  }
+
+  // ---------------- Hook: background chunk height post-processor (e.g., rivers bake) ----------------
+  /**
+   * Post-process freshly loaded chunk heights on the background streaming threads.
+   * Implementations must be THREAD-SAFE and not touch GL.
+   */
+  public interface ChunkHeightPostProcessor {
+    void processChunk(int cx, int cz, float originX, float originZ,
+                      short[] heights, short[] baseHeights,
+                      int S, float tile, float yScale);
+  }
+
+  /** Install/uninstall a chunk height post-processor. Pass null to disable. */
+  public void setChunkHeightPostProcessor(ChunkHeightPostProcessor pp) { world.chunkPost = pp; }
+
+  /** Convenience: unload all current chunks; streamer will reload on next update. */
+  public void reloadAllChunks() {
+    // Dispose loaded chunks and clear bookkeeping; next updateAndStream will repopulate
+    for (com.badlogic.gdx.utils.IntMap.Entry<TerrainChunk> e : world.chunks) e.value.dispose();
+    world.chunks.clear();
+    world.defaultFlatChunks.clear();
+    world.pending.clear();
   }
 
   /** Desktop file chooser that imports a texture into a specific subfolder under textures/ground/. */

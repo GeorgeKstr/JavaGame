@@ -55,6 +55,7 @@ public class TerrainSpline {
     List<Vector3> pts = samplePositions(Math.max(2, samplesPerSegment));
     int n = pts.size();
     if (n < 2) { lx = ly = lz = rx = ry = rz = null; triPairs = 0; ribbonDirty = false; return; }
+    final float SENTINEL = Float.NEGATIVE_INFINITY;
     float halfW = Math.max(0.1f, width * 0.5f);
     lx = new float[n]; ly = new float[n]; lz = new float[n];
     rx = new float[n]; ry = new float[n]; rz = new float[n];
@@ -68,8 +69,11 @@ public class TerrainSpline {
       tx/=tlen; tz/=tlen; float nx = -tz, nz = tx;
       float lpx = p.x + nx*halfW, lpz = p.z + nz*halfW;
       float rpx = p.x - nx*halfW, rpz = p.z - nz*halfW;
-      lx[i] = lpx; lz[i] = lpz; ly[i] = terrain.heightAt(lpx, lpz, p.y);
-      rx[i] = rpx; rz[i] = rpz; ry[i] = terrain.heightAt(rpx, rpz, p.y);
+      // Sample centerline height first; if terrain not ready, abort this rebuild and retry later
+      float cY = terrain.heightAt(p.x, p.z, SENTINEL);
+      if (cY == SENTINEL) { ribbonDirty = true; return; }
+      lx[i] = lpx; lz[i] = lpz; ly[i] = terrain.heightAt(lpx, lpz, cY);
+      rx[i] = rpx; rz[i] = rpz; ry[i] = terrain.heightAt(rpx, rpz, cY);
     }
     triPairs = n - 1; ribbonDirty = false;
   }
@@ -101,6 +105,7 @@ public class TerrainSpline {
           float halfW = Math.max(0.1f, width * 0.5f);
           lxL = new float[n]; lyL = new float[n]; lzL = new float[n];
           rxL = new float[n]; ryL = new float[n]; rzL = new float[n];
+          final float SENTINEL = Float.NEGATIVE_INFINITY;
           for (int i = 0; i < n; i++) {
             Vector3 p = pts.get(i);
             float tx, tz;
@@ -111,8 +116,10 @@ public class TerrainSpline {
             tx/=tlen; tz/=tlen; float nx = -tz, nz = tx;
             float lpx = p.x + nx*halfW, lpz = p.z + nz*halfW;
             float rpx = p.x - nx*halfW, rpz = p.z - nz*halfW;
-            lxL[i] = lpx; lzL[i] = lpz; lyL[i] = terrain.heightAt(lpx, lpz, p.y);
-            rxL[i] = rpx; rzL[i] = rpz; ryL[i] = terrain.heightAt(rpx, rpz, p.y);
+            float cY = terrain.heightAt(p.x, p.z, SENTINEL);
+            if (cY == SENTINEL) { ribbonDirty = true; return; }
+            lxL[i] = lpx; lzL[i] = lpz; lyL[i] = terrain.heightAt(lpx, lpz, cY);
+            rxL[i] = rpx; rzL[i] = rpz; ryL[i] = terrain.heightAt(rpx, rpz, cY);
           }
           triPairsL = n - 1;
         }

@@ -47,6 +47,11 @@ public final class RiverTool implements Tool {
 
   public RiverTool(SplinesLayer layer, TerrainSystem terrain) {
     this.layer = layer; this.terrain = terrain;
+    // Auto-resample ribbons whenever chunks load/unload so ribbons follow terrain without nudging
+    this.terrain.onChunksChanged(() -> {
+      java.util.List<TerrainSpline> list = this.layer.getSplines();
+      for (TerrainSpline s : list) { s.markRibbonDirty(); s.rebuildRibbonAsync(this.terrain.getBaseHeightSampler(), 8); }
+    });
   }
 
   // ----- helpers -----
@@ -207,9 +212,12 @@ public final class RiverTool implements Tool {
     // Bake button
     TextButton bake = new TextButton("Bake River Depth to Terrain", skin);
     bake.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
-      // Increased density: 12 samples per segment to reduce edge aliasing during baking
-      terrain.bakeRiversDepth(layer.getSplines(), 12);
-      // After baking, rebuild all ribbons explicitly (event-driven)
+      // Install background river baking so loads/unloads always apply depths
+      int spp = 12; // sampling density along spline segments
+      terrain.installRiverBake(layer.getSplines(), spp);
+      // Force reload so current area reflects baked heights
+      terrain.reloadAllChunks();
+      // Rebuild ribbons after geometry changes
       for (TerrainSpline s : layer.getSplines()) { s.markRibbonDirty(); s.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 8); }
     }});
     container.add(bake).left().padTop(8).row();

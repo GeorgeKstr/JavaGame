@@ -34,6 +34,15 @@ final class TerrainWorld {
   // Optional non-destructive height modifier (e.g., rivers). Read by renderer/builders.
   volatile HeightModifier heightModifier;
 
+  // Optional background post-processor to mutate heights when chunks are loaded (e.g., rivers bake)
+  volatile TerrainSystem.ChunkHeightPostProcessor chunkPost;
+
+  // Optional live list of rivers to bake on load (read on background threads; write from UI thread)
+  volatile java.util.List<com.example.game.World.Splines.TerrainSpline> riversForBake;
+
+  // Optional render-thread callback after chunks have changed (load/unload)
+  volatile Runnable onChunksChanged;
+
   // LOD
   int MAX_LOD = 0;
   float[] lodDistances = new float[]{ 50f, 130f, 260f, 520f };
@@ -88,17 +97,18 @@ final class TerrainWorld {
 
   public static final class Result {
     public final int k; public final float ox, oz;
-    public final short[] h;
+    public final short[] h;           // baked heights (final)
+    public final short[] baseH;       // optional baseline heights (pre-bake)
     public final byte[] id0, id1, id2, w0, w1, w2;
     public final boolean defaultFlat;
     public final Throwable err;
 
     public Result(int k, float ox, float oz,
-                  short[] h,
+                  short[] h, short[] baseH,
                   byte[] id0, byte[] id1, byte[] id2,
                   byte[] w0,  byte[] w1,  byte[] w2,
                   boolean defaultFlat, Throwable err) {
-      this.k=k; this.ox=ox; this.oz=oz; this.h=h;
+      this.k=k; this.ox=ox; this.oz=oz; this.h=h; this.baseH=baseH;
       this.id0=id0; this.id1=id1; this.id2=id2;
       this.w0=w0;   this.w1=w1;   this.w2=w2;
       this.defaultFlat=defaultFlat; this.err=err;

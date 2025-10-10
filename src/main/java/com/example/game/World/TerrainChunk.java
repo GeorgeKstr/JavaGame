@@ -127,6 +127,11 @@ public class TerrainChunk {
 
   /** Access raw arrays for editor reset operations. */
   public short[] getBaselineArray() { return baselineHeights; }
+  /** Set or replace the baseline array (must be S*S); stores a copy. */
+  public void setBaselineHeights(short[] base) {
+    if (base == null || base.length != S * S) return;
+    this.baselineHeights = java.util.Arrays.copyOf(base, base.length);
+  }
 
   public void setTexIds(byte[] ids) {
     if (ids == null || ids.length != S * S) throw new IllegalArgumentException("texIds length mismatch");
