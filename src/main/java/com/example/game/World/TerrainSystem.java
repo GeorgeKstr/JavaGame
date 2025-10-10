@@ -258,16 +258,22 @@ public class TerrainSystem implements HeightSampler {
     // One-time: ensure every loaded chunk has a baseline to restore from (does not overwrite if already present)
     for (com.badlogic.gdx.utils.IntMap.Entry<TerrainChunk> e : world.chunks) e.value.ensureBaseline();
 
+    // Filter rivers: RIVER type and depth > 0
+    java.util.ArrayList<com.example.game.World.Splines.TerrainSpline> toBake = new java.util.ArrayList<>();
     for (com.example.game.World.Splines.TerrainSpline s : rivers) {
-      if (s.getType() != com.example.game.World.Splines.TerrainSpline.Type.RIVER) continue;
+      if (s.getType() == com.example.game.World.Splines.TerrainSpline.Type.RIVER && s.riverDepth > 0f) {
+        toBake.add(s);
+      }
+    }
+    if (toBake.isEmpty()) return; // nothing to do
+
+    // Compute union of affected chunks for ALL rivers, then restore baseline ONCE
+    com.badlogic.gdx.utils.IntSet affectedAll = new com.badlogic.gdx.utils.IntSet();
+    int cpc = world.S - 1;
+    for (com.example.game.World.Splines.TerrainSpline s : toBake) {
       java.util.List<com.badlogic.gdx.math.Vector3> pts = s.samplePositions(Math.max(2, samplesPerSegment));
       if (pts.size() < 2) continue;
       int radiusCells = Math.max(1, Math.round((s.width * 0.5f) / tile));
-
-      // Reset all affected chunks to their baseline BEFORE stamping, so we start from base heightmap
-      // Collect affected chunk keys by sample points expanded by radius
-      com.badlogic.gdx.utils.IntSet affected = new com.badlogic.gdx.utils.IntSet();
-      int cpc = world.S - 1;
       for (com.badlogic.gdx.math.Vector3 p : pts) {
         int minCx = (int)Math.floor((p.x - radiusCells * tile) / (cpc * tile));
         int maxCx = (int)Math.floor((p.x + radiusCells * tile) / (cpc * tile));
@@ -275,15 +281,20 @@ public class TerrainSystem implements HeightSampler {
         int maxCz = (int)Math.floor((p.z + radiusCells * tile) / (cpc * tile));
         for (int cz = minCz; cz <= maxCz; cz++)
           for (int cx = minCx; cx <= maxCx; cx++)
-            affected.add(TerrainWorld.key(cx, cz));
+            affectedAll.add(TerrainWorld.key(cx, cz));
       }
-      for (com.badlogic.gdx.utils.IntSet.IntSetIterator it = affected.iterator(); it.hasNext; ) {
-        int k = it.next();
-        TerrainChunk c = world.chunks.get(k);
-        if (c != null) c.restoreAllFromBaseline();
-      }
+    }
+    for (com.badlogic.gdx.utils.IntSet.IntSetIterator it = affectedAll.iterator(); it.hasNext; ) {
+      int k = it.next();
+      TerrainChunk c = world.chunks.get(k);
+      if (c != null) c.restoreAllFromBaseline();
+    }
 
-      // Second pass: stamp river depth using profiled + clamped application to avoid over-deepen overlaps
+    // Now stamp all rivers (depth>0) over the restored baseline
+    for (com.example.game.World.Splines.TerrainSpline s : toBake) {
+      java.util.List<com.badlogic.gdx.math.Vector3> pts = s.samplePositions(Math.max(2, samplesPerSegment));
+      if (pts.size() < 2) continue;
+      int radiusCells = Math.max(1, Math.round((s.width * 0.5f) / tile));
       for (com.badlogic.gdx.math.Vector3 p : pts) {
         int gx = Math.round(p.x / tile);
         int gz = Math.round(p.z / tile);

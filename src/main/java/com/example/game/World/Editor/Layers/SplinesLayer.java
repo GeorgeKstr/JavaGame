@@ -18,6 +18,11 @@ import java.util.List;
 public final class SplinesLayer extends BaseToolLayer {
   private final TerrainSystem terrain;
   private final List<TerrainSpline> splines = new ArrayList<>();
+  // Ribbon renderer (triangles with 1 texcoord set)
+  private final com.badlogic.gdx.graphics.glutils.ImmediateModeRenderer20 im = new com.badlogic.gdx.graphics.glutils.ImmediateModeRenderer20(65536, false, true, 1);
+  // Solid-color renderer with no texcoords (prevents sampling any bound textures)
+  private final com.badlogic.gdx.graphics.glutils.ImmediateModeRenderer20 imSolid = new com.badlogic.gdx.graphics.glutils.ImmediateModeRenderer20(65536, false, true, 0);
+  private final java.util.HashMap<Integer, com.badlogic.gdx.graphics.Texture> texCache = new java.util.HashMap<>();
   // Selection shared across tools
   private TerrainSpline selectedSpline = null;
   private int selectedNode = -1;
@@ -33,6 +38,140 @@ public final class SplinesLayer extends BaseToolLayer {
     addTool(new RiverTool(this, terrain));
     // Install non-destructive height modifier that reads current river splines
     this.terrain.setHeightModifier(new com.example.game.World.Splines.SplineHeightModifier(this::getSplines));
+  }
+
+  // ---------------- Ribbon-only rendering (no overlays) ----------------
+  public void renderRibbonsOnly(Camera cam) {
+    com.badlogic.gdx.Gdx.gl.glEnable(com.badlogic.gdx.graphics.GL20.GL_BLEND);
+    com.badlogic.gdx.Gdx.gl.glBlendFunc(com.badlogic.gdx.graphics.GL20.GL_SRC_ALPHA, com.badlogic.gdx.graphics.GL20.GL_ONE_MINUS_SRC_ALPHA);
+    com.badlogic.gdx.Gdx.gl.glDisable(com.badlogic.gdx.graphics.GL20.GL_CULL_FACE);
+
+    for (TerrainSpline s : splines) {
+      if (s.getType() != TerrainSpline.Type.RIVER) continue;
+      if (!s.hasRibbon()) continue;
+      float aa = Math.max(0f, Math.min(1f, s.transparency));
+      com.badlogic.gdx.graphics.Texture tex = (s.textured ? getSplineTexture(s.textureId) : null);
+      float rr, gg, bb;
+      if (tex != null) {
+        float[] sunTint = computeSunTint(); rr = sunTint[0]; gg = sunTint[1]; bb = sunTint[2];
+      } else {
+        // Helper ribbon color similar to overlays (light blue)
+        rr = 0.08f; gg = 0.50f; bb = 1.00f;
+      }
+
+      float[] lx = s.getLX(), ly = s.getLY(), lz = s.getLZ();
+      float[] rx = s.getRX(), ry = s.getRY(), rz = s.getRZ();
+      int n = s.getTriPairs() + 1;
+      float yLift = s.heightOffset + 0.02f;
+      float ratio = Math.max(0.01f, s.ribbonWidthRatio);
+
+      int i = 0; final int maxSegmentsPerBatch = 2500;
+      float cumV = 0f;
+      while (i < n - 1) {
+        int end = Math.min(n - 1, i + maxSegmentsPerBatch);
+        float vLen = 0f;
+        if (tex != null) {
+          im.begin(cam.combined, com.badlogic.gdx.graphics.GL20.GL_TRIANGLES);
+          for (int k = i; k < end; k++) {
+            float clx0 = 0.5f * (lx[k] + rx[k]);
+            float clz0 = 0.5f * (lz[k] + rz[k]);
+            float clx1 = 0.5f * (lx[k+1] + rx[k+1]);
+            float clz1 = 0.5f * (lz[k+1] + rz[k+1]);
+            float ax = clx0, az = clz0;
+            float bx = clx1, bz = clz1;
+            float du = (float)Math.sqrt((bx-ax)*(bx-ax) + (bz-az)*(bz-az));
+            float v2 = vLen + du / Math.max(0.1f, s.width);
+            tex.bind();
+            float nlx0 = ax + (lx[k]   - ax) * ratio; float nlz0 = az + (lz[k]   - az) * ratio;
+            float nrx0 = ax + (rx[k]   - ax) * ratio; float nrz0 = az + (rz[k]   - az) * ratio;
+            float nlx1 = bx + (lx[k+1] - bx) * ratio; float nlz1 = bz + (lz[k+1] - bz) * ratio;
+            float nrx1 = bx + (rx[k+1] - bx) * ratio; float nrz1 = bz + (rz[k+1] - bz) * ratio;
+            im.texCoord(0f, cumV + vLen); im.color(rr,gg,bb,aa); im.vertex(nlx0, ly[k]   +yLift, nlz0);
+            im.texCoord(1f, cumV + vLen); im.color(rr,gg,bb,aa); im.vertex(nrx0, ry[k]   +yLift, nrz0);
+            im.texCoord(0f, cumV + v2);   im.color(rr,gg,bb,aa); im.vertex(nlx1, ly[k+1] +yLift, nlz1);
+            im.texCoord(1f, cumV + vLen); im.color(rr,gg,bb,aa); im.vertex(nrx0, ry[k]   +yLift, nrz0);
+            im.texCoord(1f, cumV + v2);   im.color(rr,gg,bb,aa); im.vertex(nrx1, ry[k+1] +yLift, nrz1);
+            im.texCoord(0f, cumV + v2);   im.color(rr,gg,bb,aa); im.vertex(nlx1, ly[k+1] +yLift, nlz1);
+            vLen = v2;
+          }
+          im.end();
+        } else {
+          com.badlogic.gdx.Gdx.gl.glActiveTexture(com.badlogic.gdx.graphics.GL20.GL_TEXTURE0);
+          com.badlogic.gdx.Gdx.gl.glBindTexture(com.badlogic.gdx.graphics.GL20.GL_TEXTURE_2D, 0);
+          imSolid.begin(cam.combined, com.badlogic.gdx.graphics.GL20.GL_TRIANGLES);
+          for (int k = i; k < end; k++) {
+            float clx0 = 0.5f * (lx[k] + rx[k]);
+            float clz0 = 0.5f * (lz[k] + rz[k]);
+            float clx1 = 0.5f * (lx[k+1] + rx[k+1]);
+            float clz1 = 0.5f * (lz[k+1] + rz[k+1]);
+            float ax = clx0, az = clz0;
+            float bx = clx1, bz = clz1;
+            float du = (float)Math.sqrt((bx-ax)*(bx-ax) + (bz-az)*(bz-az));
+            float v2 = vLen + du / Math.max(0.1f, s.width);
+            float nlx0 = ax + (lx[k]   - ax) * ratio; float nlz0 = az + (lz[k]   - az) * ratio;
+            float nrx0 = ax + (rx[k]   - ax) * ratio; float nrz0 = az + (rz[k]   - az) * ratio;
+            float nlx1 = bx + (lx[k+1] - bx) * ratio; float nlz1 = bz + (lz[k+1] - bz) * ratio;
+            float nrx1 = bx + (rx[k+1] - bx) * ratio; float nrz1 = bz + (rz[k+1] - bz) * ratio;
+            imSolid.color(rr,gg,bb,aa); imSolid.vertex(nlx0, ly[k]   +yLift, nlz0);
+            imSolid.color(rr,gg,bb,aa); imSolid.vertex(nrx0, ry[k]   +yLift, nrz0);
+            imSolid.color(rr,gg,bb,aa); imSolid.vertex(nlx1, ly[k+1] +yLift, nlz1);
+            imSolid.color(rr,gg,bb,aa); imSolid.vertex(nrx0, ry[k]   +yLift, nrz0);
+            imSolid.color(rr,gg,bb,aa); imSolid.vertex(nrx1, ry[k+1] +yLift, nrz1);
+            imSolid.color(rr,gg,bb,aa); imSolid.vertex(nlx1, ly[k+1] +yLift, nlz1);
+            vLen = v2;
+          }
+          imSolid.end();
+        }
+        i = end;
+        cumV += vLen;
+      }
+    }
+    com.badlogic.gdx.Gdx.gl.glDisable(com.badlogic.gdx.graphics.GL20.GL_BLEND);
+  }
+
+  @Override public void render3D(Camera cam) {
+    // Always draw ribbons for context
+    renderRibbonsOnly(cam);
+    // Then let the active tool draw its overlays (e.g., RiverTool nodes/lines) when this layer is active
+    super.render3D(cam);
+  }
+
+  private com.badlogic.gdx.graphics.Texture getSplineTexture(int id) {
+    if (id < 0) return null;
+    com.badlogic.gdx.graphics.Texture cached = texCache.get(id);
+    if (cached != null) return cached;
+    com.example.game.World.MapResource map = terrain.getMap();
+    var list = map.getManifest().groundTextures;
+    if (id >= list.size()) return null;
+    String path = list.get(id).file;
+    byte[] bytes = map.getTextureBytes(path);
+    if (bytes == null || bytes.length == 0) return null;
+    com.badlogic.gdx.graphics.Texture t = new com.badlogic.gdx.graphics.Texture(new com.badlogic.gdx.graphics.Pixmap(bytes, 0, bytes.length));
+    t.setFilter(com.badlogic.gdx.graphics.Texture.TextureFilter.Linear, com.badlogic.gdx.graphics.Texture.TextureFilter.Linear);
+    t.setWrap(com.badlogic.gdx.graphics.Texture.TextureWrap.Repeat, com.badlogic.gdx.graphics.Texture.TextureWrap.Repeat);
+    texCache.put(id, t);
+    return t;
+  }
+
+  private float[] computeSunTint() {
+    float hour = com.example.game.Config.cvar.CVars.RENDER_TIME_OF_DAY.get();
+    float t = (hour % 24f) / 24f;
+    float az = (float)(t * Math.PI * 2.0);
+    float maxElevDeg = 75f;
+    float maxElevRad = (float)(Math.toRadians(maxElevDeg));
+    float elev = (float)(maxElevRad * Math.sin(az - Math.PI * 0.5));
+    float sinE = (float)Math.sin(elev);
+    float sunY = sinE;
+    float intensity = Math.max(0f, sunY);
+    intensity = 0.2f + 0.8f * intensity;
+    float warmth = com.example.game.Config.cvar.CVars.RENDER_SKY_WARMTH.get();
+    float coolR=0.60f, coolG=0.70f, coolB=0.80f;
+    float warmR=0.95f, warmG=0.88f, warmB=0.72f;
+    float r = coolR + (warmR - coolR) * warmth;
+    float g = coolG + (warmG - coolG) * warmth;
+    float b = coolB + (warmB - coolB) * warmth;
+    r *= intensity; g *= intensity; b *= intensity;
+    return new float[]{ r, g, b };
   }
 
   public List<TerrainSpline> getSplines() { return splines; }

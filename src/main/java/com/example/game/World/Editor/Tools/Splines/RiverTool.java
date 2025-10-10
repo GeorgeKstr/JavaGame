@@ -26,6 +26,7 @@ public final class RiverTool implements Tool {
   private final SplinesLayer layer;
   private final TerrainSystem terrain;
   private final ImmediateModeRenderer20 im = new ImmediateModeRenderer20(65536, false, true, 1);
+  private final ImmediateModeRenderer20 imSolid = new ImmediateModeRenderer20(65536, false, true, 0);
   private final ImmediateModeRenderer20 imLines = new ImmediateModeRenderer20(16384, false, true, 0);
   private final HashMap<Integer, Texture> texCache = new HashMap<>();
 
@@ -36,10 +37,12 @@ public final class RiverTool implements Tool {
   private Slider widthSlider; private Label widthLabel;
   private Slider depthSlider; private Label depthLabel;
   private Slider steepSlider; private Label steepLabel;
+  private Slider ribbonRatioSlider; private Label ribbonRatioLabel;
   private TerrainSpline lastBoundForUI;
   // Newly tracked so values update when selection changes
   private Slider alphaSliderRef; private Label alphaLabelRef;
   private Slider hOffSliderRef; private Label hOffLabelRef;
+  private CheckBox texturedCBRef; private TextButton selectTexBtnRef; private Label texLabelRef;
   private com.badlogic.gdx.scenes.scene2d.ui.List<String> nodeList;
 
   public RiverTool(SplinesLayer layer, TerrainSystem terrain) {
@@ -88,7 +91,7 @@ public final class RiverTool implements Tool {
 
     Table dt = new Table();
     depthLabel = new Label("Depth: "+ (sel==null?"-":String.format("%.1f m", sel.riverDepth)), skin);
-    depthSlider = new Slider(0.1f, 20f, 0.1f, false, skin);
+    depthSlider = new Slider(0f, 20f, 0.1f, false, skin);
     if (sel != null) depthSlider.setValue(sel.riverDepth);
     depthSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
       TerrainSpline s = layer.getSelectedSpline(); if (s==null || s.getType()!=TerrainSpline.Type.RIVER) return; s.riverDepth = depthSlider.getValue(); s.markRibbonDirty(); s.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 8); depthLabel.setText(String.format("Depth: %.1f m", s.riverDepth)); }});
@@ -106,6 +109,17 @@ public final class RiverTool implements Tool {
     st.add(steepLabel).left().row();
     st.add(steepSlider).width(240).row();
     container.add(st).left().padBottom(8).row();
+
+    // Ribbon Width Ratio slider (scales visual ribbon width vs river width)
+    Table rrt = new Table();
+    ribbonRatioLabel = new Label("Ribbon Width Ratio: "+ (sel==null?"-":String.format("%.2f", sel.ribbonWidthRatio)), skin);
+    ribbonRatioSlider = new Slider(0.25f, 3.0f, 0.01f, false, skin);
+    if (sel != null) ribbonRatioSlider.setValue(sel.ribbonWidthRatio);
+    ribbonRatioSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+      TerrainSpline s = layer.getSelectedSpline(); if (s==null || s.getType()!=TerrainSpline.Type.RIVER) return; s.ribbonWidthRatio = ribbonRatioSlider.getValue(); ribbonRatioLabel.setText(String.format("Ribbon Width Ratio: %.2f", s.ribbonWidthRatio)); }});
+    rrt.add(ribbonRatioLabel).left().row();
+    rrt.add(ribbonRatioSlider).width(240).row();
+    container.add(rrt).left().padBottom(8).row();
 
     // Transparency slider (alpha multiplier 0..1)
     Table at = new Table();
@@ -129,23 +143,35 @@ public final class RiverTool implements Tool {
     ht.add(hOffSliderRef).width(240).row();
     container.add(ht).left().padBottom(8).row();
 
-    // Texture select using the shared TextureBrowser (open in textures/splines)
+    // Textured toggle + Texture select using the shared TextureBrowser (open in textures/splines)
     Table t = new Table();
     t.defaults().left().padRight(6);
-    final Label texLbl = new Label("Texture: " + currentTextureLabel(sel), skin);
-    TextButton selectTex = new TextButton("Select Texture...", skin);
-    selectTex.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+    texturedCBRef = new CheckBox(" Textured", skin);
+    texturedCBRef.setChecked(sel == null ? true : sel.textured);
+    texturedCBRef.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+      TerrainSpline s = layer.getSelectedSpline(); if (s == null) return;
+      s.textured = texturedCBRef.isChecked();
+      // Reset texture id to a known default on any toggle (both enable and disable)
+      s.textureId = 0;
+      if (texLabelRef != null) texLabelRef.setText("Texture: " + currentTextureLabel(s));
+      if (selectTexBtnRef != null) selectTexBtnRef.setDisabled(!s.textured);
+    }});
+    texLabelRef = new Label("Texture: " + currentTextureLabel(sel), skin);
+    selectTexBtnRef = new TextButton("Select Texture...", skin);
+    if (sel != null) selectTexBtnRef.setDisabled(!sel.textured);
+    selectTexBtnRef.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
       com.example.game.World.Editor.TextureBrowser tb = new com.example.game.World.Editor.TextureBrowser(skin, terrain, "splines", tr -> {
         TerrainSpline s = layer.getSelectedSpline();
         if (s == null) return;
-        s.textureId = tr.id;
-        texLbl.setText("Texture: " + currentTextureLabel(s));
+        s.textureId = tr.id; s.textured = true;
+        if (texLabelRef != null) texLabelRef.setText("Texture: " + currentTextureLabel(s));
+        if (texturedCBRef != null) texturedCBRef.setChecked(true);
       });
-      // best-effort: attach if stage exists
       if (container.getStage() != null) tb.show(container.getStage());
     }});
-    t.add(texLbl);
-    t.add(selectTex);
+    t.add(texturedCBRef);
+    t.add(texLabelRef);
+    t.add(selectTexBtnRef);
     container.add(t).left().row();
 
     // Nodes list (always visible; contents depend on selected spline)
@@ -254,6 +280,11 @@ public final class RiverTool implements Tool {
         if (alphaLabelRef != null) { alphaLabelRef.setText(String.format("Transparency: %.2f", spline.transparency)); }
         if (hOffSliderRef != null) { hOffSliderRef.setValue(spline.heightOffset); }
         if (hOffLabelRef != null) { hOffLabelRef.setText(String.format("Height Offset: %.2f m", spline.heightOffset)); }
+        if (ribbonRatioSlider != null) { ribbonRatioSlider.setValue(spline.ribbonWidthRatio); }
+        if (ribbonRatioLabel != null) { ribbonRatioLabel.setText(String.format("Ribbon Width Ratio: %.2f", spline.ribbonWidthRatio)); }
+        if (texturedCBRef != null) texturedCBRef.setChecked(spline.textured);
+        if (selectTexBtnRef != null) selectTexBtnRef.setDisabled(!spline.textured);
+        if (texLabelRef != null) texLabelRef.setText("Texture: " + currentTextureLabel(spline));
         return;
       }
       // Ray-vs-AABB picking (ignores terrain); uses current mouse screen coords
@@ -273,6 +304,11 @@ public final class RiverTool implements Tool {
           if (alphaLabelRef != null) { alphaLabelRef.setText(String.format("Transparency: %.2f", ssel.transparency)); }
           if (hOffSliderRef != null) { hOffSliderRef.setValue(ssel.heightOffset); }
           if (hOffLabelRef != null) { hOffLabelRef.setText(String.format("Height Offset: %.2f m", ssel.heightOffset)); }
+          if (ribbonRatioSlider != null) { ribbonRatioSlider.setValue(ssel.ribbonWidthRatio); }
+          if (ribbonRatioLabel != null) { ribbonRatioLabel.setText(String.format("Ribbon Width Ratio: %.2f", ssel.ribbonWidthRatio)); }
+          if (texturedCBRef != null) texturedCBRef.setChecked(ssel.textured);
+          if (selectTexBtnRef != null) selectTexBtnRef.setDisabled(!ssel.textured);
+          if (texLabelRef != null) texLabelRef.setText("Texture: " + currentTextureLabel(ssel));
         }
       }
       else { 
@@ -301,6 +337,19 @@ public final class RiverTool implements Tool {
       if (hOffSliderRef != null && Math.abs(hOffSliderRef.getValue() - cur.heightOffset) > 1e-5f) {
         hOffSliderRef.setValue(cur.heightOffset);
         if (hOffLabelRef != null) hOffLabelRef.setText(String.format("Height Offset: %.2f m", cur.heightOffset));
+      }
+      if (ribbonRatioSlider != null && Math.abs(ribbonRatioSlider.getValue() - cur.ribbonWidthRatio) > 1e-4f) {
+        ribbonRatioSlider.setValue(cur.ribbonWidthRatio);
+        if (ribbonRatioLabel != null) ribbonRatioLabel.setText(String.format("Ribbon Width Ratio: %.2f", cur.ribbonWidthRatio));
+      }
+      // Sync textured checkbox and enforce textureId=0 when untextured
+      if (texturedCBRef != null && texturedCBRef.isChecked() != cur.textured) {
+        texturedCBRef.setChecked(cur.textured);
+      }
+      if (selectTexBtnRef != null) selectTexBtnRef.setDisabled(cur == null || !cur.textured);
+      if (cur != null && !cur.textured && cur.textureId != 0) {
+        cur.textureId = 0;
+        if (texLabelRef != null) texLabelRef.setText("Texture: " + currentTextureLabel(cur));
       }
     }
 
@@ -342,9 +391,15 @@ public final class RiverTool implements Tool {
       if (!s.hasRibbon()) continue;
       boolean sel = (s == layer.getSelectedSpline());
       float aa = Math.max(0f, Math.min(1f, s.transparency));
-      float[] sunTint = computeSunTint();
-      float rr = sunTint[0], gg = sunTint[1], bb = sunTint[2];
-      Texture tex = getSplineTexture(s.textureId);
+      Texture tex = (s.textured ? getSplineTexture(s.textureId) : null);
+      float rr, gg, bb;
+      if (tex != null) {
+        float[] sunTint = computeSunTint();
+        rr = sunTint[0]; gg = sunTint[1]; bb = sunTint[2];
+      } else {
+        // Helper ribbon color similar to centerline/node boxes (light blue)
+        rr = 0.08f; gg = 0.50f; bb = 1.00f;
+      }
       boolean atop = false;
       if (atop) { Gdx.gl.glDisable(GL20.GL_DEPTH_TEST); Gdx.gl.glDepthMask(false); }
       Gdx.gl.glDisable(GL20.GL_CULL_FACE);
@@ -353,42 +408,76 @@ public final class RiverTool implements Tool {
       float[] rx = s.getRX(), ry = s.getRY(), rz = s.getRZ();
       int n = s.getTriPairs() + 1;
       float yLift = s.heightOffset + 0.02f;
+      float ratio = Math.max(0.01f, s.ribbonWidthRatio);
 
       // Draw in batches of segments to stay well within internal buffers
       int i = 0;
       final int maxSegmentsPerBatch = 2500; // 2500 * 6 = 15000 verts
+      float cumV = 0f; // cumulative V length across batches
       while (i < n - 1) {
         int end = Math.min(n - 1, i + maxSegmentsPerBatch);
-        im.begin(cam.combined, GL20.GL_TRIANGLES);
-        float vLen = 0f; // accumulate along centerline (V axis)
-        for (int k = i; k < end; k++) {
-          float ax = 0.5f * (lx[k] + rx[k]);
-          float az = 0.5f * (lz[k] + rz[k]);
-          float bx = 0.5f * (lx[k+1] + rx[k+1]);
-          float bz = 0.5f * (lz[k+1] + rz[k+1]);
-          float du = (float)Math.sqrt((bx-ax)*(bx-ax) + (bz-az)*(bz-az));
-          float v2 = vLen + du / Math.max(0.1f, s.width); // tile along length proportional to width
-          if (tex != null) tex.bind();
-          // Rotate UVs 90 degrees: U across width [left=0,right=1], V along length
-          // tri 1
-          if (tex != null) im.texCoord(0f, vLen);
-          im.color(rr,gg,bb,aa); im.vertex(lx[k],   ly[k]  +yLift, lz[k]);
-          if (tex != null) im.texCoord(1f, vLen);
-          im.color(rr,gg,bb,aa); im.vertex(rx[k],   ry[k]  +yLift, rz[k]);
-          if (tex != null) im.texCoord(0f, v2);
-          im.color(rr,gg,bb,aa); im.vertex(lx[k+1], ly[k+1]+yLift, lz[k+1]);
-          // tri 2
-          if (tex != null) im.texCoord(1f, vLen);
-          im.color(rr,gg,bb,aa); im.vertex(rx[k],   ry[k]  +yLift, rz[k]);
-          if (tex != null) im.texCoord(1f, v2);
-          im.color(rr,gg,bb,aa); im.vertex(rx[k+1], ry[k+1]+yLift, rz[k+1]);
-          if (tex != null) im.texCoord(0f, v2);
-          im.color(rr,gg,bb,aa); im.vertex(lx[k+1], ly[k+1]+yLift, lz[k+1]);
-          vLen = v2;
+        float vLen = 0f; // accumulate along centerline (V axis) for this batch
+        if (tex != null) {
+          im.begin(cam.combined, GL20.GL_TRIANGLES);
+          for (int k = i; k < end; k++) {
+            float clx0 = 0.5f * (lx[k] + rx[k]);
+            float clz0 = 0.5f * (lz[k] + rz[k]);
+            float clx1 = 0.5f * (lx[k+1] + rx[k+1]);
+            float clz1 = 0.5f * (lz[k+1] + rz[k+1]);
+            float ax = clx0, az = clz0;
+            float bx = clx1, bz = clz1;
+            float du = (float)Math.sqrt((bx-ax)*(bx-ax) + (bz-az)*(bz-az));
+            float v2 = vLen + du / Math.max(0.1f, s.width);
+            tex.bind();
+            // tri 1
+            float nlx0 = ax + (lx[k]   - ax) * ratio; float nlz0 = az + (lz[k]   - az) * ratio;
+            float nrx0 = ax + (rx[k]   - ax) * ratio; float nrz0 = az + (rz[k]   - az) * ratio;
+            float nlx1 = bx + (lx[k+1] - bx) * ratio; float nlz1 = bz + (lz[k+1] - bz) * ratio;
+            float nrx1 = bx + (rx[k+1] - bx) * ratio; float nrz1 = bz + (rz[k+1] - bz) * ratio;
+            im.texCoord(0f, cumV + vLen); im.color(rr,gg,bb,aa); im.vertex(nlx0, ly[k]   +yLift, nlz0);
+            im.texCoord(1f, cumV + vLen); im.color(rr,gg,bb,aa); im.vertex(nrx0, ry[k]   +yLift, nrz0);
+            im.texCoord(0f, cumV + v2);   im.color(rr,gg,bb,aa); im.vertex(nlx1, ly[k+1] +yLift, nlz1);
+            // tri 2
+            im.texCoord(1f, cumV + vLen); im.color(rr,gg,bb,aa); im.vertex(nrx0, ry[k]   +yLift, nrz0);
+            im.texCoord(1f, cumV + v2);   im.color(rr,gg,bb,aa); im.vertex(nrx1, ry[k+1] +yLift, nrz1);
+            im.texCoord(0f, cumV + v2);   im.color(rr,gg,bb,aa); im.vertex(nlx1, ly[k+1] +yLift, nlz1);
+            vLen = v2;
+          }
+          im.end();
+        } else {
+          // Ensure no texture is bound to avoid sampling birds or other layers
+          Gdx.gl.glBindTexture(GL20.GL_TEXTURE_2D, 0);
+          imSolid.begin(cam.combined, GL20.GL_TRIANGLES);
+          for (int k = i; k < end; k++) {
+            float clx0 = 0.5f * (lx[k] + rx[k]);
+            float clz0 = 0.5f * (lz[k] + rz[k]);
+            float clx1 = 0.5f * (lx[k+1] + rx[k+1]);
+            float clz1 = 0.5f * (lz[k+1] + rz[k+1]);
+            float ax = clx0, az = clz0;
+            float bx = clx1, bz = clz1;
+            float du = (float)Math.sqrt((bx-ax)*(bx-ax) + (bz-az)*(bz-az));
+            float v2 = vLen + du / Math.max(0.1f, s.width);
+            // tri 1
+            float nlx0 = ax + (lx[k]   - ax) * ratio; float nlz0 = az + (lz[k]   - az) * ratio;
+            float nrx0 = ax + (rx[k]   - ax) * ratio; float nrz0 = az + (rz[k]   - az) * ratio;
+            float nlx1 = bx + (lx[k+1] - bx) * ratio; float nlz1 = bz + (lz[k+1] - bz) * ratio;
+            float nrx1 = bx + (rx[k+1] - bx) * ratio; float nrz1 = bz + (rz[k+1] - bz) * ratio;
+            imSolid.color(rr,gg,bb,aa); imSolid.vertex(nlx0, ly[k]   +yLift, nlz0);
+            imSolid.color(rr,gg,bb,aa); imSolid.vertex(nrx0, ry[k]   +yLift, nrz0);
+            imSolid.color(rr,gg,bb,aa); imSolid.vertex(nlx1, ly[k+1] +yLift, nlz1);
+            // tri 2
+            imSolid.color(rr,gg,bb,aa); imSolid.vertex(nrx0, ry[k]   +yLift, nrz0);
+            imSolid.color(rr,gg,bb,aa); imSolid.vertex(nrx1, ry[k+1] +yLift, nrz1);
+            imSolid.color(rr,gg,bb,aa); imSolid.vertex(nlx1, ly[k+1] +yLift, nlz1);
+            vLen = v2;
+          }
+          imSolid.end();
         }
-        im.end();
         i = end;
+        cumV += vLen;
       }
+
+      // No extra polygons: ratio only scales left/right vertices; caps removed per request
 
       // Ensure overlays (centerline and node boxes) draw with solid color (no texturing)
       Gdx.gl.glBindTexture(GL20.GL_TEXTURE_2D, 0);

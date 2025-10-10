@@ -20,6 +20,8 @@ public class TerrainSpline {
   public int textureId = 0;      // index into Splines texture list (separate from ground textures)
   public float transparency = 1.0f; // 0..1 alpha multiplier for ribbon rendering
   public float heightOffset = 0f;   // meters; rendering-only vertical offset for ribbon
+  public boolean textured = true;   // whether to render with texture; if false, solid color helper ribbon
+  public float ribbonWidthRatio = 1.0f; // scales visual ribbon width relative to river width (1=match, >1 overflow)
 
   public TerrainSpline(Type type) { this.type = type; }
   public Type getType() { return type; }
