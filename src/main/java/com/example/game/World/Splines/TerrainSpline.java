@@ -151,7 +151,7 @@ public class TerrainSpline {
 
       // Adaptive sampling density by XZ length (keeps spacing uniform in meters)
       float lenXZ = (float)Math.sqrt((p2.x - p1.x)*(p2.x - p1.x) + (p2.z - p1.z)*(p2.z - p1.z));
-      int spp = Math.max(4, Math.round(baseSpp * Math.max(0.5f, lenXZ / 5f))); // ~5m reference
+      int spp = Math.max(2, Math.round(baseSpp * Math.max(0.5f, lenXZ / 5f))); // ~5m reference
 
       // Include endpoint only on the last segment to avoid duplicate points between segments
       int steps = (i == segs - 1) ? spp : (spp - 1);

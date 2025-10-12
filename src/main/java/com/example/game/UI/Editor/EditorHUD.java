@@ -22,6 +22,7 @@ public final class EditorHUD implements Disposable {
     void onWarmthChanged(float warmth);
     void onGodRaysChanged(float exposure);
     void onViewDistanceChanged(int radius);
+    void onRefresh();
   }
 
   private final Stage stage = new Stage(new ScreenViewport());
@@ -190,6 +191,10 @@ public final class EditorHUD implements Disposable {
     // Chunk grid toggle
     CheckBox grid = CVarUI.checkbox("Show chunk grid", skin, CVars.RENDER_TERRAIN_CHUNK_GRID);
     parent.add(grid).left().padTop(4).row();
+    // Refresh button
+    TextButton refresh = new TextButton("Refresh", skin);
+    refresh.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ cb.onRefresh(); }});
+    parent.add(refresh).left().padTop(6).row();
   }
 
   public void setFps(int fps) { if (fpsLabel != null) fpsLabel.setText("FPS: " + fps); }

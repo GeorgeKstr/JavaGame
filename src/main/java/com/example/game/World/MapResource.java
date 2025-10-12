@@ -65,6 +65,8 @@ public class MapResource {
 
   // NEW: staged textures not yet written to the .map file on disk
   private final Map<String, byte[]> stagedTextures = new LinkedHashMap<>();
+  // NEW: staged arbitrary extra entries (e.g., splines/splines.json)
+  private final Map<String, byte[]> stagedExtras = new LinkedHashMap<>();
 
   private MapResource(Manifest m, byte[] bytes) {
     this.manifest = m;
@@ -284,6 +286,17 @@ public class MapResource {
     stagedTextures.clear();
   }
 
+  // ---- staged extras API ----
+  /** Stage an arbitrary extra file inside the ZIP (e.g., "splines/splines.json"). */
+  public void stageExtra(String pathInZip, byte[] data) {
+    if (pathInZip == null || pathInZip.isEmpty() || data == null) return;
+    stagedExtras.put(pathInZip, data);
+  }
+  /** Access copy of staged extras. */
+  public Map<String, byte[]> getStagedExtrasCopy() { return new LinkedHashMap<>(stagedExtras); }
+  /** Clears staged extras. */
+  public void clearStagedExtras() { stagedExtras.clear(); }
+
   // ----------------------------
   // TextureArray builder
   // ----------------------------
@@ -407,8 +420,15 @@ public class MapResource {
       allTextures.putIfAbsent(e.getKey(), e.getValue());
     }
 
-    MapResource.save(path, manifest, chunkFiles, allTextures);
+    // Include staged extras in a single call by using saveDelta with existing ZIP bytes
+    Map<String, byte[]> overrides = new LinkedHashMap<>();
+    // manifest and chunks will be written by saveDelta(String, Manifest, bytes,...)
+    // so we pass textures+extras as explicit overrides there
+    overrides.putAll(allTextures);
+    overrides.putAll(getStagedExtrasCopy());
+    saveDelta(path, manifest, this.bytes, chunkFiles, overrides);
     clearStagedTextures();
+    clearStagedExtras();
   }
 
   /** Save back to the last known source path, if available, including staged textures. */
@@ -643,8 +663,13 @@ public class MapResource {
       tex.put(tr.file, data); // ensure referenced textures are present
     }
 
+    // Merge staged extras with textures
+    Map<String, byte[]> extras = getStagedExtrasCopy();
+    Map<String, byte[]> overrides = new LinkedHashMap<>(tex);
+    overrides.putAll(extras);
+
     // Build a fresh ZIP by copying through existing entries and overriding the ones we provide
-    saveDelta(path, manifest, this.bytes, chunkFiles, tex);
+    saveDelta(path, manifest, this.bytes, chunkFiles, overrides);
 
     // Refresh in-memory bytes from disk so subsequent operations see the latest file
     try {

@@ -42,6 +42,7 @@ public class EditorScreen implements Screen {
 
   // UI
   private EditorHUD hud;
+  private com.example.game.World.Editor.Layers.SplinesLayer splinesLayerRef;
 
   // rendering
   private RenderContext ctx;
@@ -108,7 +109,8 @@ public class EditorScreen implements Screen {
     hud = new EditorHUD();
     layers.add(new TerrainLayer(terrain, hud.skin()));
     layers.add(new WalkLayer(terrain, hud.skin()));
-    layers.add(new SplinesLayer(terrain, hud.skin()));
+    splinesLayerRef = new SplinesLayer(terrain, hud.skin());
+    layers.add(splinesLayerRef);
 
     hud.build(layers, new EditorHUD.Callbacks() {
       @Override public void onBack() { app.goToMenu(); }
@@ -124,6 +126,18 @@ public class EditorScreen implements Screen {
       @Override public void onGodRaysChanged(float e) { CVars.RENDER_GODRAYS_EXP.set(e); }
 
       @Override public void onViewDistanceChanged(int r) { CVars.VIEW_RADIUS_CHUNKS.set(r); }
+
+      @Override public void onRefresh() {
+        // Reload chunks to reapply live baking and current edits
+        terrain.reloadAllChunks();
+        // Ensure ribbons reflect current terrain
+        if (splinesLayerRef != null) {
+          for (var s : splinesLayerRef.getSplines()) {
+            s.markRibbonDirty();
+            s.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 2);
+          }
+        }
+      }
     },
     // Initial values for HUD sliders/knobs from CVars
     /* initialHour */ CVars.RENDER_TIME_OF_DAY.get(),
@@ -231,6 +245,8 @@ public class EditorScreen implements Screen {
     }
   }
   private void saveMap() {
+    // Stage latest splines into the map before saving chunks/textures
+    if (splinesLayerRef != null) splinesLayerRef.saveSplinesToMap();
     terrain.buildManifestMerged();
     terrain.encodeChunksToHmx();
     terrain.saveAll(mapPath);

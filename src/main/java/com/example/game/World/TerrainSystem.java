@@ -46,15 +46,49 @@ public class TerrainSystem implements HeightSampler {
   /** Set a callback invoked on the render thread after chunks have changed (load/unload). */
   public void onChunksChanged(Runnable r) { world.onChunksChanged = r; }
 
+  /** Add a listener invoked on the render thread after chunks change. Multiple listeners are supported by chaining. */
+  public void addChunksChangedListener(Runnable r) {
+    if (r == null) return;
+    Runnable prev = world.onChunksChanged;
+    if (prev == null) {
+      world.onChunksChanged = r;
+    } else {
+      world.onChunksChanged = () -> { try { prev.run(); } catch (Throwable ignored) {} try { r.run(); } catch (Throwable ignored) {} };
+    }
+  }
+
+  /** Snapshot of currently loaded chunk keys (cx,cz) packed via TerrainWorld.key(). */
+  public java.util.Set<Integer> getLoadedChunkKeysCopy() {
+    java.util.HashSet<Integer> set = new java.util.HashSet<>();
+    for (com.badlogic.gdx.utils.IntMap.Entry<TerrainChunk> e : world.chunks) set.add(e.key);
+    return set;
+  }
+
+  /** Query if chunk at (cx,cz) is currently loaded. */
+  public boolean isChunkLoaded(int cx, int cz) {
+    int k = TerrainWorld.key(cx, cz);
+    return world.chunks.containsKey(k);
+  }
+
   // ---------------- Concrete post-processor: River baker ----------------
   /** Thread-safe snapshot baker that stamps river depths into chunk height arrays. */
   public static class RiverBakePostProcessor implements ChunkHeightPostProcessor {
+    // Either use a live provider or a fixed snapshot list
+    private final java.util.function.Supplier<java.util.List<com.example.game.World.Splines.TerrainSpline>> provider;
     private final java.util.List<com.example.game.World.Splines.TerrainSpline> rivers;
     private final int samplesPerSegment;
 
+    // Snapshot list constructor (back-compat)
     public RiverBakePostProcessor(java.util.List<com.example.game.World.Splines.TerrainSpline> source, int samplesPerSegment) {
-      // Snapshot list to avoid mutation during background processing
+      this.provider = null;
       this.rivers = new java.util.ArrayList<>(source != null ? source : java.util.Collections.emptyList());
+      this.samplesPerSegment = Math.max(2, samplesPerSegment);
+    }
+
+    // Live provider constructor (preferred)
+    public RiverBakePostProcessor(java.util.function.Supplier<java.util.List<com.example.game.World.Splines.TerrainSpline>> provider, int samplesPerSegment) {
+      this.provider = provider;
+      this.rivers = null;
       this.samplesPerSegment = Math.max(2, samplesPerSegment);
     }
 
@@ -62,7 +96,7 @@ public class TerrainSystem implements HeightSampler {
     public void processChunk(int cx, int cz, float originX, float originZ,
                              short[] heights, short[] baseHeights,
                              int S, float tile, float yScale) {
-      if (heights == null || rivers.isEmpty()) return;
+      if (heights == null) return;
       if (baseHeights == null || baseHeights.length != heights.length) return; // must have baseline
       final int cellsPerChunk = S - 1;
       final float chunkSize = cellsPerChunk * tile;
@@ -71,7 +105,10 @@ public class TerrainSystem implements HeightSampler {
       final float minX = originX, minZ = originZ;
       final float maxX = originX + chunkSize, maxZ = originZ + chunkSize;
 
-      for (com.example.game.World.Splines.TerrainSpline s : rivers) {
+      java.util.List<com.example.game.World.Splines.TerrainSpline> src = (provider != null ? provider.get() : rivers);
+      if (src == null || src.isEmpty()) return;
+
+      for (com.example.game.World.Splines.TerrainSpline s : src) {
         if (s == null || s.getType() != com.example.game.World.Splines.TerrainSpline.Type.RIVER) continue;
         if (s.riverDepth <= 0f || s.width <= 0.01f) continue;
 
@@ -141,6 +178,12 @@ public class TerrainSystem implements HeightSampler {
   /** Convenience: install a river bake post-processor computed from current rivers. */
   public void installRiverBake(java.util.List<com.example.game.World.Splines.TerrainSpline> rivers, int samplesPerSegment) {
     setChunkHeightPostProcessor(new RiverBakePostProcessor(rivers, samplesPerSegment));
+  }
+
+  /** Install a live river bake post-processor that reads rivers from a Supplier at chunk load time. */
+  public void installRiverBakeLive(java.util.function.Supplier<java.util.List<com.example.game.World.Splines.TerrainSpline>> riversSupplier,
+                                   int samplesPerSegment) {
+    setChunkHeightPostProcessor(new RiverBakePostProcessor(riversSupplier, samplesPerSegment));
   }
 
   // ---------------- Hook: background chunk height post-processor (e.g., rivers bake) ----------------

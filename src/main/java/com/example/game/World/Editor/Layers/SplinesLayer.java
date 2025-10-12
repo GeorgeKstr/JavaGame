@@ -17,7 +17,12 @@ import java.util.List;
 
 public final class SplinesLayer extends BaseToolLayer {
   private final TerrainSystem terrain;
+  // Active splines (subset of catalog) used for rendering/picking
   private final List<TerrainSpline> splines = new ArrayList<>();
+  // Full catalog loaded from map (persisted); may be larger than 'splines'
+  private final List<TerrainSpline> catalog = new ArrayList<>();
+  // Background worker for activation sync
+  private static final java.util.concurrent.ExecutorService SPLINE_SYNC = java.util.concurrent.Executors.newSingleThreadExecutor(r -> { Thread t=new Thread(r, "SplineSync"); t.setDaemon(true); return t; });
   // Ribbon renderer (triangles with 1 texcoord set)
   private final com.badlogic.gdx.graphics.glutils.ImmediateModeRenderer20 im = new com.badlogic.gdx.graphics.glutils.ImmediateModeRenderer20(65536, false, true, 1);
   // Solid-color renderer with no texcoords (prevents sampling any bound textures)
@@ -38,6 +43,46 @@ public final class SplinesLayer extends BaseToolLayer {
     addTool(new RiverTool(this, terrain));
     // Install non-destructive height modifier that reads current river splines
     this.terrain.setHeightModifier(new com.example.game.World.Splines.SplineHeightModifier(this::getSplines));
+
+    // Load splines catalog from map (if present)
+    try { loadSplinesFromMap(); } catch (Throwable ignored) {}
+
+    // Install live river baker so newly loaded chunks always bake using current catalog
+    terrain.installRiverBakeLive(() -> getCatalogSnapshot(), 12);
+    // Force a one-time reload so already-loaded chunks in view get baked immediately
+    terrain.reloadAllChunks();
+
+    // Seed active list from full catalog so splines are visible immediately at startup
+    synchronized (splines) {
+      splines.clear();
+      splines.addAll(getCatalogSnapshot());
+    }
+    // Kick off a ribbon rebuild for visibility; TerrainSpline will defer if terrain not ready
+    for (TerrainSpline s : getSplines()) { s.markRibbonDirty(); s.rebuildRibbonAsync(this.terrain.getBaseHeightSampler(), 2); }
+
+    // Then refine to only those intersecting currently loaded chunks
+    resyncActiveSplinesAsync();
+
+    // When chunks change, rebuild ribbons and resync active set (additive listener)
+    this.terrain.addChunksChangedListener(() -> {
+      // After chunks load/unload and baking applies, reproject nodes to baseline and rebuild ribbons
+      var hs = this.terrain.getBaseHeightSampler();
+      for (TerrainSpline s : this.splines) {
+        java.util.List<com.example.game.World.Splines.TerrainSplineNode> nodes = s.getNodes();
+        for (int i = 0; i < nodes.size(); i++) {
+          com.example.game.World.Splines.TerrainSplineNode n = nodes.get(i);
+          float ny = hs.heightAt(n.pos.x, n.pos.z, n.pos.y) + 0.05f;
+          if (Math.abs(ny - n.pos.y) > 1e-4f) {
+            n.pos.y = ny;
+          }
+        }
+        s.markRibbonDirty();
+        s.rebuildRibbonAsync(this.terrain.getBaseHeightSampler(), 2);
+      }
+      resyncActiveSplinesAsync();
+      // Stage latest catalog so a subsequent save writes splines into the map
+      saveSplinesToMap();
+    });
   }
 
   // ---------------- Ribbon-only rendering (no overlays) ----------------
@@ -46,7 +91,12 @@ public final class SplinesLayer extends BaseToolLayer {
     com.badlogic.gdx.Gdx.gl.glBlendFunc(com.badlogic.gdx.graphics.GL20.GL_SRC_ALPHA, com.badlogic.gdx.graphics.GL20.GL_ONE_MINUS_SRC_ALPHA);
     com.badlogic.gdx.Gdx.gl.glDisable(com.badlogic.gdx.graphics.GL20.GL_CULL_FACE);
 
-    for (TerrainSpline s : splines) {
+    java.util.List<TerrainSpline> iter;
+    synchronized (splines) { iter = new java.util.ArrayList<>(splines); }
+    for (TerrainSpline s : iter) {
+      if (s.isRibbonDirty() && !s.isRibbonRebuilding()) {
+        s.rebuildRibbonAsync(this.terrain.getBaseHeightSampler(), 2);
+      }
       if (s.getType() != TerrainSpline.Type.RIVER) continue;
       if (!s.hasRibbon()) continue;
       // Only render textured ribbons here. Non-textured (helper) ribbons are shown exclusively in RiverTool.
@@ -145,12 +195,19 @@ public final class SplinesLayer extends BaseToolLayer {
     return new float[]{ r, g, b };
   }
 
-  public List<TerrainSpline> getSplines() { return splines; }
+  public List<TerrainSpline> getSplines() {
+    synchronized (splines) { return java.util.Collections.unmodifiableList(new java.util.ArrayList<>(splines)); }
+  }
+  /** Full catalog snapshot (all splines persisted in map), for baking/loading. */
+  public List<TerrainSpline> getCatalogSnapshot() {
+    synchronized (catalog) { return java.util.Collections.unmodifiableList(new java.util.ArrayList<>(catalog)); }
+  }
   public TerrainSystem getTerrain() { return terrain; }
 
   public TerrainSpline createSpline(TerrainSpline.Type type) {
     TerrainSpline s = new TerrainSpline(type);
     splines.add(s);
+    catalog.add(s);
     return s;
   }
 
@@ -158,6 +215,117 @@ public final class SplinesLayer extends BaseToolLayer {
 
   @Override public void onActivate() { clearSelection(); }
   @Override public void onDeactivate() { /* no-op for now */ }
+
+  // ---------------- Persistence: serialize/deserialize ----------------
+  public void saveSplinesToMap() {
+    // Serialize catalog (not just active) so data is complete
+    String json = serializeSplines(this.catalog);
+    byte[] bytes = json.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    terrain.getMap().stageExtra("splines/splines.json", bytes);
+  }
+
+  private void loadSplinesFromMap() {
+    byte[] data = terrain.getMap().readEntry("splines/splines.json");
+    if (data == null || data.length == 0) {
+      // Seed catalog from any existing in-memory splines if file not present
+      this.catalog.clear();
+      this.catalog.addAll(this.splines);
+      return;
+    }
+    String json = new String(data, java.nio.charset.StandardCharsets.UTF_8);
+    java.util.List<TerrainSpline> loaded = deserializeSplines(json);
+    this.catalog.clear();
+    this.catalog.addAll(loaded);
+  }
+
+  private static String serializeSplines(List<TerrainSpline> list) {
+    StringBuilder sb = new StringBuilder(1024);
+    sb.append('{').append("\"splines\":[");
+    for (int i=0;i<list.size();i++) {
+      TerrainSpline s = list.get(i);
+      if (i>0) sb.append(',');
+      sb.append('{')
+        .append("\"type\":\"").append(s.getType().name()).append("\"")
+        .append(",\"width\":").append(s.width)
+        .append(",\"riverDepth\":").append(s.riverDepth)
+        .append(",\"bankFalloff\":").append(s.bankFalloff)
+        .append(",\"textureId\":").append(s.textureId)
+        .append(",\"transparency\":").append(s.transparency)
+        .append(",\"heightOffset\":").append(s.heightOffset)
+        .append(",\"textured\":").append(s.textured)
+        .append(",\"ribbonWidthRatio\":").append(s.ribbonWidthRatio)
+        .append(",\"nodes\":[");
+      java.util.List<com.example.game.World.Splines.TerrainSplineNode> nodes = s.getNodes();
+      for (int j=0;j<nodes.size();j++) {
+        var n = nodes.get(j).pos;
+        if (j>0) sb.append(',');
+        sb.append('{')
+          .append("\"x\":").append(n.x)
+          .append(",\"y\":").append(n.y)
+          .append(",\"z\":").append(n.z)
+          .append('}');
+      }
+      sb.append(']').append('}');
+    }
+    sb.append(']').append('}');
+    return sb.toString();
+  }
+
+  private static java.util.List<TerrainSpline> deserializeSplines(String json) {
+    java.util.ArrayList<TerrainSpline> out = new java.util.ArrayList<>();
+    com.badlogic.gdx.utils.JsonValue root = new com.badlogic.gdx.utils.JsonReader().parse(json);
+    com.badlogic.gdx.utils.JsonValue arr = root.get("splines");
+    if (arr == null) return out;
+    for (com.badlogic.gdx.utils.JsonValue s : arr) {
+      String type = s.getString("type", "RIVER");
+      TerrainSpline ts = new TerrainSpline("ROAD".equals(type)? TerrainSpline.Type.ROAD : TerrainSpline.Type.RIVER);
+      ts.width = s.getFloat("width", ts.width);
+      ts.riverDepth = s.getFloat("riverDepth", ts.riverDepth);
+      ts.bankFalloff = s.getFloat("bankFalloff", ts.bankFalloff);
+      ts.textureId = s.getInt("textureId", ts.textureId);
+      ts.transparency = s.getFloat("transparency", ts.transparency);
+      ts.heightOffset = s.getFloat("heightOffset", ts.heightOffset);
+      ts.textured = s.getBoolean("textured", true);
+      ts.ribbonWidthRatio = s.getFloat("ribbonWidthRatio", ts.ribbonWidthRatio);
+      com.badlogic.gdx.utils.JsonValue nodes = s.get("nodes");
+      if (nodes != null) {
+        for (com.badlogic.gdx.utils.JsonValue n : nodes) {
+          float x = n.getFloat("x"); float y = n.getFloat("y"); float z = n.getFloat("z");
+          ts.addNode(new com.example.game.World.Splines.TerrainSplineNode(x, y, z));
+        }
+      }
+      out.add(ts);
+    }
+    return out;
+  }
+
+  // ---------------- Activation: keep only splines intersecting loaded chunks ----------------
+  public void resyncActiveSplinesAsync() {
+    final java.util.Set<Integer> loaded = terrain.getLoadedChunkKeysCopy();
+    if (loaded.isEmpty()) return;
+    final int S = terrain.getMap().getManifest().samplesPerSide;
+    final float tile = terrain.getMap().getManifest().tile;
+    final float chunkSize = (S - 1) * tile;
+    SPLINE_SYNC.submit(() -> {
+      java.util.ArrayList<TerrainSpline> next = new java.util.ArrayList<>();
+      for (TerrainSpline s : catalog) {
+        boolean keep = false;
+        java.util.List<com.example.game.World.Splines.TerrainSplineNode> nodes = s.getNodes();
+        for (int i=0;i<nodes.size();i++) {
+          var p = nodes.get(i).pos;
+          int cx = (int)Math.floor(p.x / chunkSize);
+          int cz = (int)Math.floor(p.z / chunkSize);
+          if (terrain.isChunkLoaded(cx, cz)) { keep = true; break; }
+        }
+        if (keep) next.add(s);
+      }
+      // Publish on render thread context next frame; here we replace list (simple editor)
+      synchronized (splines) {
+        splines.clear();
+        splines.addAll(next);
+      }
+    });
+  }
 
   // ---------------- Selection API ----------------
   public TerrainSpline getSelectedSpline() { return selectedSpline; }
@@ -168,7 +336,8 @@ public final class SplinesLayer extends BaseToolLayer {
   /** Find nearest node in all splines to the given world XZ within the given radius (meters). */
   public PickResult pickNode(float worldX, float worldZ, float radiusMeters) {
     TerrainSpline bestS = null; int bestIdx = -1; float bestD2 = radiusMeters * radiusMeters;
-    for (TerrainSpline s : splines) {
+    java.util.List<TerrainSpline> iter; synchronized (splines) { iter = new java.util.ArrayList<>(splines); }
+    for (TerrainSpline s : iter) {
       List<TerrainSplineNode> nodes = s.getNodes();
       for (int i = 0; i < nodes.size(); i++) {
         float dx = nodes.get(i).pos.x - worldX;
@@ -190,7 +359,8 @@ public final class SplinesLayer extends BaseToolLayer {
     Ray ray = cam.getPickRay(screenX, screenY);
     TerrainSpline bestS = null; int bestIdx = -1; float bestT = Float.POSITIVE_INFINITY;
     Vector3 min = new Vector3(); Vector3 max = new Vector3();
-    for (TerrainSpline s : splines) {
+    java.util.List<TerrainSpline> iter; synchronized (splines) { iter = new java.util.ArrayList<>(splines); }
+    for (TerrainSpline s : iter) {
       List<TerrainSplineNode> nodes = s.getNodes();
       for (int i = 0; i < nodes.size(); i++) {
         Vector3 c = nodes.get(i).pos;
@@ -232,7 +402,8 @@ public final class SplinesLayer extends BaseToolLayer {
   public PickResult pickNodeBox(float worldX, float worldY, float worldZ, float halfXZ, float halfY) {
     TerrainSpline bestS = null; int bestIdx = -1;
     float bestScore = Float.POSITIVE_INFINITY; // lower is better
-    for (TerrainSpline s : splines) {
+    java.util.List<TerrainSpline> iter; synchronized (splines) { iter = new java.util.ArrayList<>(splines); }
+    for (TerrainSpline s : iter) {
       List<TerrainSplineNode> nodes = s.getNodes();
       for (int i = 0; i < nodes.size(); i++) {
         var p = nodes.get(i).pos;
