@@ -23,6 +23,8 @@ public final class EditorHUD implements Disposable {
     void onGodRaysChanged(float exposure);
     void onViewDistanceChanged(int radius);
     void onRefresh();
+    void onOpenObjects();
+    void onToggleOuterLod(boolean enabled);
   }
 
   private final Stage stage = new Stage(new ScreenViewport());
@@ -191,10 +193,19 @@ public final class EditorHUD implements Disposable {
     // Chunk grid toggle
     CheckBox grid = CVarUI.checkbox("Show chunk grid", skin, CVars.RENDER_TERRAIN_CHUNK_GRID);
     parent.add(grid).left().padTop(4).row();
+    // Low-LOD outer terrain toggle (CVar-bound)
+    final CheckBox lodOuter = CVarUI.checkbox("Show low-LOD outer terrain", skin, CVars.RENDER_SHOW_OUTER_LOD);
+    lodOuter.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ cb.onToggleOuterLod(lodOuter.isChecked()); }});
+    parent.add(lodOuter).left().padTop(4).row();
     // Refresh button
     TextButton refresh = new TextButton("Refresh", skin);
     refresh.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ cb.onRefresh(); }});
     parent.add(refresh).left().padTop(6).row();
+
+    // Objects browser button
+    TextButton objects = new TextButton("Objects...", skin);
+    objects.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ cb.onOpenObjects(); }});
+    parent.add(objects).left().padTop(4).row();
   }
 
   public void setFps(int fps) { if (fpsLabel != null) fpsLabel.setText("FPS: " + fps); }

@@ -27,6 +27,7 @@ public final class CVars {
   public static final CVar<Float>   RENDER_GODRAYS_EXP   = reg.defineFloat("render.godRaysExposure", 3f);
   public static final CVar<Boolean> RENDER_TERRAIN_WIREFRAME = reg.defineBool("render.terrainWireframe", false);
   public static final CVar<Boolean> RENDER_TERRAIN_CHUNK_GRID = reg.defineBool("render.terrainChunkGrid", false);
+  public static final CVar<Boolean> RENDER_SHOW_OUTER_LOD = reg.defineBool("render.showOuterLod", true);
 
   // Rendering
   public static final CVar<Boolean> RENDER_VSYNC         = reg.defineBool("render.vsync", true);

@@ -206,12 +206,19 @@ public final class SplinesLayer extends BaseToolLayer {
 
   public TerrainSpline createSpline(TerrainSpline.Type type) {
     TerrainSpline s = new TerrainSpline(type);
+    // Assign a global unique id and register
+    s.setId(com.example.game.World.PlaceableRegistry.nextId());
+    com.example.game.World.PlaceableRegistry.upsert(s);
     splines.add(s);
     catalog.add(s);
     return s;
   }
 
-  public void removeSpline(TerrainSpline s) { splines.remove(s); }
+  public void removeSpline(TerrainSpline s) {
+    splines.remove(s);
+    catalog.remove(s);
+    com.example.game.World.PlaceableRegistry.remove(s);
+  }
 
   @Override public void onActivate() { clearSelection(); }
   @Override public void onDeactivate() { /* no-op for now */ }
@@ -246,6 +253,8 @@ public final class SplinesLayer extends BaseToolLayer {
       if (i>0) sb.append(',');
       sb.append('{')
         .append("\"type\":\"").append(s.getType().name()).append("\"")
+        .append(",\"id\":").append(s.getId())
+        .append(",\"name\":\"").append(s.getName().replace("\"","\\\"")).append("\"")
         .append(",\"width\":").append(s.width)
         .append(",\"riverDepth\":").append(s.riverDepth)
         .append(",\"bankFalloff\":").append(s.bankFalloff)
@@ -276,9 +285,17 @@ public final class SplinesLayer extends BaseToolLayer {
     com.badlogic.gdx.utils.JsonValue root = new com.badlogic.gdx.utils.JsonReader().parse(json);
     com.badlogic.gdx.utils.JsonValue arr = root.get("splines");
     if (arr == null) return out;
+    long maxId = 0L;
     for (com.badlogic.gdx.utils.JsonValue s : arr) {
       String type = s.getString("type", "RIVER");
       TerrainSpline ts = new TerrainSpline("ROAD".equals(type)? TerrainSpline.Type.ROAD : TerrainSpline.Type.RIVER);
+      // id/name (assign id if missing)
+      long sid = s.getLong("id", 0L);
+      if (sid == 0L) sid = com.example.game.World.PlaceableRegistry.nextId();
+      ts.setId(sid);
+      String nm = s.getString("name", ts.getName());
+      ts.setName(nm);
+      if (sid > maxId) maxId = sid;
       ts.width = s.getFloat("width", ts.width);
       ts.riverDepth = s.getFloat("riverDepth", ts.riverDepth);
       ts.bankFalloff = s.getFloat("bankFalloff", ts.bankFalloff);
@@ -295,7 +312,10 @@ public final class SplinesLayer extends BaseToolLayer {
         }
       }
       out.add(ts);
+      com.example.game.World.PlaceableRegistry.upsert(ts);
     }
+    // ensure id generator continues past the largest id we saw
+    com.example.game.World.PlaceableRegistry.ensureAtLeast(maxId + 1);
     return out;
   }
 

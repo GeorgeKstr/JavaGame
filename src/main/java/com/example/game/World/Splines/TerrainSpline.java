@@ -1,13 +1,14 @@
 package com.example.game.World.Splines;
 
 import com.badlogic.gdx.math.Vector3;
+import com.example.game.World.Placeable;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
 /** A spline path laid on terrain. XZ define the path; Y can be sampled from terrain or overridden per-node. */
-public class TerrainSpline {
+public class TerrainSpline implements Placeable {
   public enum Type { ROAD, RIVER }
 
   private final Type type;
@@ -23,6 +24,10 @@ public class TerrainSpline {
   public boolean textured = true;   // whether to render with texture; if false, solid color helper ribbon
   public float ribbonWidthRatio = 1.0f; // scales visual ribbon width relative to river width (1=match, >1 overflow)
 
+  // placeable metadata
+  private String name = "new spline";
+  private long id = 0L; // assigned by layer/loader
+
   public TerrainSpline(Type type) { this.type = type; }
   public Type getType() { return type; }
 
@@ -32,6 +37,18 @@ public class TerrainSpline {
   public void removeNode(int index) { if (index>=0 && index<nodes.size()) { nodes.remove(index); ribbonDirty = true; } }
   public void setNodePos(int idx, Vector3 p) { if (idx>=0 && idx<nodes.size()) { nodes.get(idx).pos.set(p); ribbonDirty = true; } }
   public int size() { return nodes.size(); }
+
+  // ---------------- Placeable ----------------
+  @Override public long getId() { return id; }
+  @Override public String getName() { return name; }
+  public void setName(String n) { if (n != null && !n.isEmpty()) name = n; }
+  public void setId(long id) { this.id = id; }
+  @Override public Vector3 getPosition() {
+    if (nodes.isEmpty()) return new Vector3(0,0,0);
+    float sx=0, sy=0, sz=0; int n = nodes.size();
+    for (TerrainSplineNode node : nodes) { sx += node.pos.x; sy += node.pos.y; sz += node.pos.z; }
+    return new Vector3(sx/n, sy/n, sz/n);
+  }
 
   // Cached ribbon geometry (left/right edge vertices sampled onto terrain)
   private volatile boolean ribbonDirty = true;
