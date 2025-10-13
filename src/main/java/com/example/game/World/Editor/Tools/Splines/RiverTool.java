@@ -214,7 +214,7 @@ public final class RiverTool implements Tool {
     // (Bake button removed; baking is live. Use global Refresh in HUD if needed.)
   }
 
-  @Override public void onSelected() { active = null; dragging = false; layer.clearSelection(); }
+  @Override public void onSelected() { active = null; dragging = false; layer.clearSelection(); com.example.game.World.Editor.EditorContext.setSelectedPlaceable(null); }
 
   @Override public void onPointerDown(Vector3 world, int button, boolean shift, boolean ctrl) {
     if (button == com.badlogic.gdx.Input.Buttons.LEFT) {
@@ -227,6 +227,7 @@ public final class RiverTool implements Tool {
           if (spline == null) spline = layer.createSpline(TerrainSpline.Type.RIVER);
           spline.addNode(new TerrainSplineNode(world.x, y, world.z));
           layer.select(spline, spline.size()-1);
+          com.example.game.World.Editor.EditorContext.setSelectedPlaceable(spline);
           spline.markRibbonDirty();
           spline.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 2);
           if (nodeList != null) nodeList.setItems(buildNodeLabels(spline)); nodeList.setSelectedIndex(spline.size()-1);
@@ -269,6 +270,7 @@ public final class RiverTool implements Tool {
         insertAt = Math.max(0, Math.min(insertAt, spline.size()));
         spline.insertNode(insertAt, new TerrainSplineNode(world.x, y, world.z));
         layer.select(spline, insertAt);
+        com.example.game.World.Editor.EditorContext.setSelectedPlaceable(spline);
         spline.markRibbonDirty();
         spline.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 2);
         if (nodeList != null) nodeList.setItems(buildNodeLabels(spline)); nodeList.setSelectedIndex(insertAt);
@@ -292,6 +294,7 @@ public final class RiverTool implements Tool {
       var pick = layer.pickNodeRayAABB(EditorContext.getCamera(), sx, sy, 1.0f, 0.4f, 0.8f);
       if (pick != null) {
         layer.select(pick.spline, pick.nodeIndex); dragging = true;
+        com.example.game.World.Editor.EditorContext.setSelectedPlaceable(pick.spline);
         // Sync sliders to picked spline
         TerrainSpline ssel = layer.getSelectedSpline();
         if (ssel != null && ssel.getType() == TerrainSpline.Type.RIVER) {
@@ -311,7 +314,7 @@ public final class RiverTool implements Tool {
         }
       }
       else { 
-        layer.clearSelection(); 
+        layer.clearSelection(); com.example.game.World.Editor.EditorContext.setSelectedPlaceable(null);
         dragging = false; 
         if (nodeList != null) nodeList.clearItems();
       }

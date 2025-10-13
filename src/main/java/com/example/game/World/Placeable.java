@@ -8,6 +8,8 @@ public interface Placeable {
   long getId();
   /** Human-friendly display name. */
   String getName();
+  /** Set display name. Implementations should persist this with the object. */
+  void setName(String name);
   /** World-space position used for focusing/jumping. */
   Vector3 getPosition();
 }

@@ -77,6 +77,9 @@ public final class StageAwareInputRouter implements InputProcessor {
       if (stage.touchDown(screenX, screenY, pointer, button)) return true;
       return secondary != null && secondary.touchDown(screenX, screenY, pointer, button);
     } else {
+      // Clicked outside UI: explicitly clear UI focus so TextFields de-focus
+      stage.setKeyboardFocus(null);
+      stage.setScrollFocus(null);
       if (secondary != null && secondary.touchDown(screenX, screenY, pointer, button)) return true;
       return stage.touchDown(screenX, screenY, pointer, button);
     }

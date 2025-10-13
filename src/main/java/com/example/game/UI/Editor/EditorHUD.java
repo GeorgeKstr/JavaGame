@@ -25,6 +25,7 @@ public final class EditorHUD implements Disposable {
     void onRefresh();
     void onOpenObjects();
     void onToggleOuterLod(boolean enabled);
+    void onRenameSelectedPlaceable(String newName);
   }
 
   private final Stage stage = new Stage(new ScreenViewport());
@@ -36,6 +37,9 @@ public final class EditorHUD implements Disposable {
 
   private Label hourLabel, raysLabel, distanceLabel, fpsLabel;
   private Slider hourSlider, raysSlider, distanceSlider;
+  private TextField selectedPlaceableField;
+  private long lastSelectedId = Long.MIN_VALUE;
+  private String lastSelectedName = null;
 
   public EditorHUD() {
     root.setFillParent(true);
@@ -205,7 +209,22 @@ public final class EditorHUD implements Disposable {
     // Objects browser button
     TextButton objects = new TextButton("Objects...", skin);
     objects.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ cb.onOpenObjects(); }});
-    parent.add(objects).left().padTop(4).row();
+    // Selected placeable rename field next to objects
+    Table objRow = new Table();
+    objRow.add(objects).left().padRight(6);
+    selectedPlaceableField = new TextField("", skin);
+    selectedPlaceableField.setMessageText("Selected name...");
+    selectedPlaceableField.setTextFieldListener((textField, c) -> {
+      if (c == '\n' || c == '\r') {
+        cb.onRenameSelectedPlaceable(selectedPlaceableField.getText());
+      }
+    });
+    selectedPlaceableField.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+      // Commit on change as well; EditorScreen will no-op if unchanged/invalid
+      cb.onRenameSelectedPlaceable(selectedPlaceableField.getText());
+    }});
+    objRow.add(selectedPlaceableField).width(180);
+    parent.add(objRow).left().padTop(4).row();
   }
 
   public void setFps(int fps) { if (fpsLabel != null) fpsLabel.setText("FPS: " + fps); }
@@ -213,6 +232,14 @@ public final class EditorHUD implements Disposable {
   public void actAndDraw(float dt) {
     stage.act(dt);
     stage.draw();
+    // Sync selected placeable name field with current selection
+    com.example.game.World.Placeable sel = com.example.game.World.Editor.EditorContext.getSelectedPlaceable();
+    long id = (sel == null ? Long.MIN_VALUE : sel.getId());
+    String name = (sel == null ? "" : (sel.getName()==null?"":sel.getName()));
+    if (id != lastSelectedId || (name != null && !name.equals(lastSelectedName))) {
+      if (selectedPlaceableField != null) selectedPlaceableField.setText(name);
+      lastSelectedId = id; lastSelectedName = name;
+    }
     if (Gdx.input.isKeyJustPressed(Input.Keys.F5)) {
       // convenience: pretend the "Save" button was pressed
       for (Actor a : tabsBar.getChildren()) {

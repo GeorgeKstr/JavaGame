@@ -11,6 +11,7 @@ import com.badlogic.gdx.math.Vector3;
 public final class EditorContext {
 
   private static volatile Camera camera;   // set once on Screen.show(), updated by EditorCamera
+  private static volatile com.example.game.World.Placeable selectedPlaceable; // currently selected placeable (optional)
 
   private EditorContext() {}
 
@@ -51,4 +52,12 @@ public final class EditorContext {
     Camera cam = camera;
     return cam != null && cam.viewportWidth == Gdx.graphics.getWidth() && cam.viewportHeight == Gdx.graphics.getHeight();
   }
+
+  // -------------------
+  // Selected placeable tracking
+  // -------------------
+  /** Set the currently selected placeable (null to clear). */
+  public static void setSelectedPlaceable(com.example.game.World.Placeable p) { selectedPlaceable = p; }
+  /** Get the currently selected placeable, or null. */
+  public static com.example.game.World.Placeable getSelectedPlaceable() { return selectedPlaceable; }
 }

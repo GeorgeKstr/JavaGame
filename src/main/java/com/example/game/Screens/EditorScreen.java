@@ -445,6 +445,22 @@ public class EditorScreen implements Screen {
         showOuterLod = enabled;
         CVars.RENDER_SHOW_OUTER_LOD.set(enabled);
       }
+
+      @Override public void onRenameSelectedPlaceable(String newName) {
+        com.example.game.World.Placeable p = com.example.game.World.Editor.EditorContext.getSelectedPlaceable();
+        if (p == null) return;
+        if (newName == null) newName = "";
+        String trimmed = newName.trim();
+        if (trimmed.isEmpty()) return;
+        // Update name
+        p.setName(trimmed);
+        // Keep registry up to date so ObjectBrowser reflects new name
+        com.example.game.World.PlaceableRegistry.upsert(p);
+        // Persist splines if applicable
+        if (p instanceof com.example.game.World.Splines.TerrainSpline) {
+          if (splinesLayerRef != null) splinesLayerRef.saveSplinesToMap();
+        }
+      }
     },
     // Initial values for HUD sliders/knobs from CVars
     /* initialHour */ CVars.RENDER_TIME_OF_DAY.get(),
@@ -515,13 +531,29 @@ public class EditorScreen implements Screen {
     if (ctrl && Gdx.input.isKeyJustPressed(Input.Keys.S)) { saveMap(); performRefresh(); return;}
     // R: refresh
     if (Gdx.input.isKeyJustPressed(Input.Keys.R)) { performRefresh(); }
+    // O: open Objects browser (don't trigger when typing in a UI TextField)
+    com.badlogic.gdx.scenes.scene2d.Actor kb = hud.stage().getKeyboardFocus();
+    boolean typing = (kb instanceof com.badlogic.gdx.scenes.scene2d.ui.TextField);
+    if (!typing && Gdx.input.isKeyJustPressed(Input.Keys.O)) {
+      // Reuse existing callback to open the browser
+      java.util.List<com.example.game.World.Placeable> items = com.example.game.World.PlaceableRegistry.snapshot();
+      com.example.game.UI.Editor.ObjectBrowser.show(hud.stage(), hud.skin(), items, p -> {
+        if (p == null) return;
+        com.badlogic.gdx.math.Vector3 v = p.getPosition();
+        float y = terrain.heightAt(v.x, v.z, v.y);
+        edCam.setFocus(v.x, y, v.z);
+      });
+    }
     if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
       Dialog dlg = new Dialog("Are you sure?", hud.skin()) {
         @Override protected void result(Object obj) { if (Boolean.TRUE.equals(obj)) app.goToMenu(); }
       };
       dlg.text("Exit to main menu?"); dlg.button("Exit", true); dlg.button("Cancel", false); dlg.show(hud.stage());
     }
-    inputRouter.update(dt); // for WASD movement
+    // Only route camera/tool input when UI does not have keyboard/scroll focus
+    if (hud.stage().getKeyboardFocus() == null && hud.stage().getScrollFocus() == null) {
+      inputRouter.update(dt); // for WASD/arrow movement
+    }
   }
 
   private void performRefresh() {

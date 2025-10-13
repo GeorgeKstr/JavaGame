@@ -97,7 +97,7 @@ public final class SplinesLayer extends BaseToolLayer {
       if (s.isRibbonDirty() && !s.isRibbonRebuilding()) {
         s.rebuildRibbonAsync(this.terrain.getBaseHeightSampler(), 2);
       }
-      if (s.getType() != TerrainSpline.Type.RIVER) continue;
+      if (s.getType() != TerrainSpline.Type.RIVER && s.getType() != TerrainSpline.Type.ROAD) continue;
       if (!s.hasRibbon()) continue;
       // Only render textured ribbons here. Non-textured (helper) ribbons are shown exclusively in RiverTool.
       if (!s.textured) continue;

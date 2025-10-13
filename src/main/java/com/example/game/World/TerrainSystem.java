@@ -109,7 +109,9 @@ public class TerrainSystem implements HeightSampler {
       if (src == null || src.isEmpty()) return;
 
       for (com.example.game.World.Splines.TerrainSpline s : src) {
-        if (s == null || s.getType() != com.example.game.World.Splines.TerrainSpline.Type.RIVER) continue;
+        if (s == null) continue;
+        com.example.game.World.Splines.TerrainSpline.Type ty = s.getType();
+        if (ty != com.example.game.World.Splines.TerrainSpline.Type.RIVER && ty != com.example.game.World.Splines.TerrainSpline.Type.ROAD) continue;
         if (s.riverDepth <= 0f || s.width <= 0.01f) continue;
 
         java.util.List<com.badlogic.gdx.math.Vector3> pts = s.samplePositions(samplesPerSegment);
@@ -422,10 +424,12 @@ public class TerrainSystem implements HeightSampler {
     // One-time: ensure every loaded chunk has a baseline to restore from (does not overwrite if already present)
     for (com.badlogic.gdx.utils.IntMap.Entry<TerrainChunk> e : world.chunks) e.value.ensureBaseline();
 
-    // Filter rivers: RIVER type and depth > 0
+    // Filter splines: RIVER or ROAD type and depth > 0
     java.util.ArrayList<com.example.game.World.Splines.TerrainSpline> toBake = new java.util.ArrayList<>();
     for (com.example.game.World.Splines.TerrainSpline s : rivers) {
-      if (s.getType() == com.example.game.World.Splines.TerrainSpline.Type.RIVER && s.riverDepth > 0f) {
+      com.example.game.World.Splines.TerrainSpline.Type ty = s.getType();
+      if ((ty == com.example.game.World.Splines.TerrainSpline.Type.RIVER || ty == com.example.game.World.Splines.TerrainSpline.Type.ROAD)
+          && s.riverDepth > 0f) {
         toBake.add(s);
       }
     }
