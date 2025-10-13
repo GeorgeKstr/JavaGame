@@ -65,7 +65,7 @@ public final class EditorHUD implements Disposable {
     fpsLabel = new Label("FPS: --", skin);
     tabsBar.add(fpsLabel).padRight(12).right();
 
-    TextButton save = new TextButton("Save (F5)", skin);
+    TextButton save = new TextButton("Save (Ctrl+S)", skin);
     save.addListener(SkinFactory.onClick(cb::onSave));
     tabsBar.add(save).right().padRight(6);
 

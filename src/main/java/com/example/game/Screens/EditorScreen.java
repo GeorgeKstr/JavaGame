@@ -416,7 +416,7 @@ public class EditorScreen implements Screen {
     hud.build(layers, new EditorHUD.Callbacks() {
       @Override public void onBack() { app.goToMenu(); }
 
-      @Override public void onSave() { saveMap(); }
+      @Override public void onSave() { saveMap(); performRefresh(); }
 
       @Override public void onHourChanged(float h) { CVars.RENDER_TIME_OF_DAY.set(h); }
 
@@ -428,87 +428,7 @@ public class EditorScreen implements Screen {
 
       @Override public void onViewDistanceChanged(int r) { CVars.VIEW_RADIUS_CHUNKS.set(r); }
 
-      @Override public void onRefresh() {
-        // Reload chunks to reapply live baking and current edits
-        terrain.reloadAllChunks();
-        // Ensure ribbons reflect current terrain
-        if (splinesLayerRef != null) {
-          for (var s : splinesLayerRef.getSplines()) {
-            s.markRibbonDirty();
-            s.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 2);
-          }
-        }
-
-        // Kick off background per-chunk corner height computation for a larger radius
-        final var mf = map.getManifest();
-        final int S = mf.samplesPerSide;
-        final float tile = mf.tile;
-        final float yScale = mf.yScale;
-        final int cpc = S - 1;
-        final float chunkSize = cpc * tile;
-        final Vector3 f = edCam.focus().cpy();
-        final int camCx = (int)Math.floor(f.x / chunkSize);
-        final int camCz = (int)Math.floor(f.z / chunkSize);
-        final int viewR = CVars.VIEW_RADIUS_CHUNKS.get();
-        final int avgR = Math.max(viewR + 4, viewR * 2); // compute at larger radius
-
-        avgExec.submit(() -> {
-          try {
-            // Provider to decode HMX
-            com.example.game.World.SparseChunkProvider provider = new com.example.game.World.SparseChunkProvider("", S);
-            // Compute for a full ring around the camera, not just listed chunks
-            for (int cz = camCz - avgR; cz <= camCz + avgR; cz++) {
-              for (int cx = camCx - avgR; cx <= camCx + avgR; cx++) {
-                int dx = Math.abs(cx - camCx), dz = Math.abs(cz - camCz);
-                int md = Math.max(dx, dz);
-                if (md > avgR) continue;
-                byte[] bytes = map.readChunkHmx(cx, cz);
-                float y00, y10, y01, y11;
-                int dominantTex = map.getManifest().defaultTexture;
-                if (bytes == null) {
-                  // Flat terrain fallback (no file): baseline 0
-                  y00 = y10 = y01 = y11 = 0f;
-                } else {
-                  var lc = provider.loadFromBytes(bytes);
-                  short[] h = lc.heights;
-                  // Corner indices in row-major (z as rows, x as columns)
-                  int S2 = S;
-                  int i00 = 0;                 // (0,0)
-                  int i10 = (S2 - 1);          // (S-1,0)
-                  int i01 = (S2 - 1) * S2;     // (0,S-1)
-                  int i11 = (S2 - 1) * S2 + (S2 - 1); // (S-1,S-1)
-                  y00 = h[i00] * yScale;
-                  y10 = h[i10] * yScale;
-                  y01 = h[i01] * yScale;
-                  y11 = h[i11] * yScale;
-
-                  // Determine dominant texture by accumulated weights
-                  // Accumulate weights per texture id across samples
-                  java.util.HashMap<Integer, Long> acc = new java.util.HashMap<>();
-                  byte[] id0 = lc.id0, id1 = lc.id1, id2 = lc.id2;
-                  byte[] w0  = lc.w0,  w1  = lc.w1,  w2  = lc.w2;
-                  int n = h.length;
-                  for (int i = 0; i < n; i++) {
-                    int t0 = id0[i] & 0xFF; int t1 = id1[i] & 0xFF; int t2 = id2[i] & 0xFF;
-                    int ww0 = w0[i] & 0xFF; int ww1 = w1[i] & 0xFF; int ww2 = w2[i] & 0xFF;
-                    if (ww0 > 0) acc.merge(t0, (long)ww0, Long::sum);
-                    if (ww1 > 0) acc.merge(t1, (long)ww1, Long::sum);
-                    if (ww2 > 0) acc.merge(t2, (long)ww2, Long::sum);
-                  }
-                  long bestW = -1; int bestId = dominantTex;
-                  for (var e : acc.entrySet()) { if (e.getValue() > bestW) { bestW = e.getValue(); bestId = e.getKey(); } }
-                  dominantTex = bestId;
-                }
-                int key = (cx << 16) ^ (cz & 0xFFFF);
-                chunkCornerHeights.put(key, new float[]{ y00, y10, y01, y11 });
-                // Cache albedo for rendering
-                float[] rgb = textureAvgCache.computeIfAbsent(dominantTex, EditorScreen.this::computeTextureAverageColor);
-                if (rgb != null) chunkAlbedo.put(key, rgb);
-              }
-            }
-          } catch (Throwable ignored) {}
-        });
-      }
+      @Override public void onRefresh() { performRefresh(); }
 
       @Override public void onOpenObjects() {
         java.util.List<com.example.game.World.Placeable> items = com.example.game.World.PlaceableRegistry.snapshot();
@@ -583,14 +503,100 @@ public class EditorScreen implements Screen {
     // Minimap disabled by default; keep function available
     if (showMinimap) drawHeightMinimap2D();
 
-    inputRouter.update(dt); // for WASD movement
-    if (Gdx.input.isKeyJustPressed(Input.Keys.F5)) saveMap();
+    handleInput(dt);
+  }
+
+  private void handleInput(float dt) {
+    if (Gdx.input.isKeyJustPressed(Input.Keys.F1)) {layers.setActive("terrain"); hud.rebuildLeftPane(layers);}
+    if (Gdx.input.isKeyJustPressed(Input.Keys.F2)) {layers.setActive("walk"); hud.rebuildLeftPane(layers);}
+    if (Gdx.input.isKeyJustPressed(Input.Keys.F3)) {layers.setActive("splines"); hud.rebuildLeftPane(layers);}
+
+    boolean ctrl = Gdx.input.isKeyPressed(Input.Keys.CONTROL_LEFT) || Gdx.input.isKeyPressed(Input.Keys.CONTROL_RIGHT);
+    if (ctrl && Gdx.input.isKeyJustPressed(Input.Keys.S)) { saveMap(); performRefresh(); return;}
+    // R: refresh
+    if (Gdx.input.isKeyJustPressed(Input.Keys.R)) { performRefresh(); }
     if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
       Dialog dlg = new Dialog("Are you sure?", hud.skin()) {
         @Override protected void result(Object obj) { if (Boolean.TRUE.equals(obj)) app.goToMenu(); }
       };
       dlg.text("Exit to main menu?"); dlg.button("Exit", true); dlg.button("Cancel", false); dlg.show(hud.stage());
     }
+    inputRouter.update(dt); // for WASD movement
+  }
+
+  private void performRefresh() {
+    // Reload chunks to reapply live baking and current edits
+    terrain.reloadAllChunks();
+    // Ensure ribbons reflect current terrain
+    if (splinesLayerRef != null) {
+      for (var s : splinesLayerRef.getSplines()) {
+        s.markRibbonDirty();
+        s.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 2);
+      }
+    }
+
+    // Kick off background per-chunk corner height computation for a larger radius
+    final var mfLocal = map.getManifest();
+    final int Slocal = mfLocal.samplesPerSide;
+    final float tileLocal = mfLocal.tile;
+    final float yScaleLocal = mfLocal.yScale;
+    final int cpcl = Slocal - 1;
+    final float chunkSizeL = cpcl * tileLocal;
+    final Vector3 focus = edCam.focus().cpy();
+    final int camCxL = (int)Math.floor(focus.x / chunkSizeL);
+    final int camCzL = (int)Math.floor(focus.z / chunkSizeL);
+    final int viewRL = CVars.VIEW_RADIUS_CHUNKS.get();
+    final int avgRL = Math.max(viewRL + 4, viewRL * 2); // compute at larger radius
+
+    avgExec.submit(() -> {
+      try {
+        com.example.game.World.SparseChunkProvider provider = new com.example.game.World.SparseChunkProvider("", Slocal);
+        for (int cz = camCzL - avgRL; cz <= camCzL + avgRL; cz++) {
+          for (int cx = camCxL - avgRL; cx <= camCxL + avgRL; cx++) {
+            int dx = Math.abs(cx - camCxL), dz = Math.abs(cz - camCzL);
+            int md = Math.max(dx, dz);
+            if (md > avgRL) continue;
+            byte[] bytes = map.readChunkHmx(cx, cz);
+            float y00, y10, y01, y11;
+            int dominantTex = map.getManifest().defaultTexture;
+            if (bytes == null) {
+              y00 = y10 = y01 = y11 = 0f;
+            } else {
+              var lc = provider.loadFromBytes(bytes);
+              short[] hh = lc.heights;
+              int S2 = Slocal;
+              int i00 = 0;
+              int i10 = (S2 - 1);
+              int i01 = (S2 - 1) * S2;
+              int i11 = (S2 - 1) * S2 + (S2 - 1);
+              y00 = hh[i00] * yScaleLocal;
+              y10 = hh[i10] * yScaleLocal;
+              y01 = hh[i01] * yScaleLocal;
+              y11 = hh[i11] * yScaleLocal;
+
+              java.util.HashMap<Integer, Long> acc = new java.util.HashMap<>();
+              byte[] id0 = lc.id0, id1 = lc.id1, id2 = lc.id2;
+              byte[] w0  = lc.w0,  w1  = lc.w1,  w2  = lc.w2;
+              int n = hh.length;
+              for (int i = 0; i < n; i++) {
+                int t0 = id0[i] & 0xFF; int t1 = id1[i] & 0xFF; int t2 = id2[i] & 0xFF;
+                int ww0 = w0[i] & 0xFF; int ww1 = w1[i] & 0xFF; int ww2 = w2[i] & 0xFF;
+                if (ww0 > 0) acc.merge(t0, (long)ww0, Long::sum);
+                if (ww1 > 0) acc.merge(t1, (long)ww1, Long::sum);
+                if (ww2 > 0) acc.merge(t2, (long)ww2, Long::sum);
+              }
+              long bestW = -1; int bestId = dominantTex;
+              for (var e : acc.entrySet()) { if (e.getValue() > bestW) { bestW = e.getValue(); bestId = e.getKey(); } }
+              dominantTex = bestId;
+            }
+            int key = (cx << 16) ^ (cz & 0xFFFF);
+            chunkCornerHeights.put(key, new float[]{ y00, y10, y01, y11 });
+            float[] rgb = textureAvgCache.computeIfAbsent(dominantTex, EditorScreen.this::computeTextureAverageColor);
+            if (rgb != null) chunkAlbedo.put(key, rgb);
+          }
+        }
+      } catch (Throwable ignored) {}
+    });
   }
 
   @Override public void resize(int w, int h) {

@@ -141,10 +141,10 @@ public final class EditorInputRouter extends InputAdapter {
 
   /** Call this each frame to keep keyboard movement responsive. */
   public void update(float dt) {
-    boolean w = Gdx.input.isKeyPressed(Input.Keys.W);
-    boolean a = Gdx.input.isKeyPressed(Input.Keys.A);
-    boolean s = Gdx.input.isKeyPressed(Input.Keys.S);
-    boolean d = Gdx.input.isKeyPressed(Input.Keys.D);
+    boolean w = Gdx.input.isKeyPressed(Input.Keys.UP);
+    boolean a = Gdx.input.isKeyPressed(Input.Keys.LEFT);
+    boolean s = Gdx.input.isKeyPressed(Input.Keys.DOWN);
+    boolean d = Gdx.input.isKeyPressed(Input.Keys.RIGHT);
     if (w || a || s || d) {
       access.moveWASD(w, a, s, d, dt);
     }
