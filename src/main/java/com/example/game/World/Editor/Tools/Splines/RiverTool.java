@@ -3,6 +3,10 @@ package com.example.game.World.Editor.Tools.Splines;
 import com.badlogic.gdx.graphics.Camera;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.Texture;
+import com.badlogic.gdx.graphics.Mesh;
+import com.badlogic.gdx.graphics.VertexAttribute;
+import com.badlogic.gdx.graphics.VertexAttributes;
+import com.badlogic.gdx.graphics.glutils.ShaderProgram;
 import com.badlogic.gdx.graphics.glutils.ImmediateModeRenderer20;
 import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.scenes.scene2d.Actor;
@@ -32,6 +36,10 @@ public final class RiverTool implements Tool {
 
   private TerrainSpline active;
   private boolean dragging = false;
+  // Water shader resources
+  private ShaderProgram waterShader;
+  private float timeAccum = 0f;
+  private Mesh ribbonMesh;
 
   // UI controls to allow syncing on selection changes within the tool
   private Slider widthSlider; private Label widthLabel;
@@ -52,6 +60,56 @@ public final class RiverTool implements Tool {
       java.util.List<TerrainSpline> list = this.layer.getSplines();
       for (TerrainSpline s : list) { s.markRibbonDirty(); s.rebuildRibbonAsync(this.terrain.getBaseHeightSampler(), 8); }
     });
+
+    // Compile water shader (no textures). Simple procedural flow and edge foam.
+    ShaderProgram.pedantic = false;
+    String vert =
+      "attribute vec3 a_position;\n"+
+      "attribute vec4 a_color;\n"+
+      "attribute vec2 a_texCoord0;\n"+
+      "uniform mat4 u_projTrans;\n"+
+      "varying vec4 v_color;\n"+
+      "varying vec2 v_uv;\n"+
+      "void main(){\n"+
+      "  v_color = a_color;\n"+
+      "  v_uv = a_texCoord0;\n"+
+      "  gl_Position = u_projTrans * vec4(a_position,1.0);\n"+
+      "}";
+    String frag =
+      "#ifdef GL_ES\nprecision mediump float;\n#endif\n"+
+      "varying vec4 v_color;\n"+
+      "varying vec2 v_uv;\n"+
+      "uniform float u_time;\n"+
+      "// v_uv.x: 0..1 across width (0 left, 1 right)\n"+
+      "// v_uv.y: along length (meters/width normalized)\n"+
+      "void main(){\n"+
+      "  float u = clamp(v_uv.x, 0.0, 1.0);\n"+
+      "  float v = v_uv.y + u_time * 0.15; // flow speed\n"+
+      "  // base water tint (will be multiplied by v_color)\n"+
+      "  vec3 base = vec3(0.08, 0.50, 1.00);\n"+
+      "  // subtle flow pattern\n"+
+      "  float wave1 = sin(v*10.0 + u*6.2831);\n"+
+      "  float wave2 = sin(v*21.0 + (1.0-u)*3.1416);\n"+
+      "  float flow = 0.5 + 0.5*wave1*0.6 + 0.5*wave2*0.4;\n"+
+      "  // foam near edges\n"+
+      "  float edge = min(u, 1.0-u);\n"+
+      "  float foam = smoothstep(0.2, 0.0, edge);\n"+
+      "  foam *= 0.6 + 0.4*sin(v*30.0);\n"+
+      "  vec3 color = base * mix(0.6, 1.1, flow);\n"+
+      "  color = mix(color, vec3(1.0), clamp(foam, 0.0, 1.0));\n"+
+      "  float alpha = v_color.a;\n"+
+      "  gl_FragColor = vec4(color * v_color.rgb, alpha);\n"+
+      "}";
+    waterShader = new ShaderProgram(vert, frag);
+    if (!waterShader.isCompiled()) {
+      com.badlogic.gdx.Gdx.app.error("RiverTool", "Water shader compile error: "+waterShader.getLog());
+    }
+    // Prepare a reusable mesh (dynamic)
+    ribbonMesh = new Mesh(true, 15000, 0,
+      new VertexAttribute(VertexAttributes.Usage.Position, 3, "a_position"),
+      new VertexAttribute(VertexAttributes.Usage.ColorUnpacked, 4, "a_color"),
+      new VertexAttribute(VertexAttributes.Usage.TextureCoordinates, 2, "a_texCoord0")
+    );
   }
 
   // ----- helpers -----
@@ -329,6 +387,7 @@ public final class RiverTool implements Tool {
   }
 
   @Override public void update(float dt, Camera cam) {
+    timeAccum += dt;
     // Keep UI sliders in sync with current selection every frame
     TerrainSpline cur = layer.getSelectedSpline();
     if (cur != null && cur.getType() == TerrainSpline.Type.RIVER) {
@@ -385,7 +444,7 @@ public final class RiverTool implements Tool {
   }
 
   @Override public void render3D(Camera cam) {
-    // Draw all river splines as textured ribbons (fallback to colored if texture unavailable)
+    // Draw all river splines using procedural water shader (no textures)
     Gdx.gl.glEnable(GL20.GL_BLEND);
     Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
     for (TerrainSpline s : layer.getSplines()) {
@@ -393,15 +452,8 @@ public final class RiverTool implements Tool {
       if (!s.hasRibbon()) continue;
       boolean sel = (s == layer.getSelectedSpline());
       float aa = Math.max(0f, Math.min(1f, s.transparency));
-      Texture tex = (s.textured ? getSplineTexture(s.textureId) : null);
-      float rr, gg, bb;
-      if (tex != null) {
-        float[] sunTint = computeSunTint();
-        rr = sunTint[0]; gg = sunTint[1]; bb = sunTint[2];
-      } else {
-        // Helper ribbon color similar to centerline/node boxes (light blue)
-        rr = 0.08f; gg = 0.50f; bb = 1.00f;
-      }
+      float[] sunTint = computeSunTint();
+      float rr = sunTint[0]; float gg = sunTint[1]; float bb = sunTint[2];
       boolean atop = false;
       if (atop) { Gdx.gl.glDisable(GL20.GL_DEPTH_TEST); Gdx.gl.glDepthMask(false); }
       Gdx.gl.glDisable(GL20.GL_CULL_FACE);
@@ -412,68 +464,49 @@ public final class RiverTool implements Tool {
       float yLift = s.heightOffset + 0.02f;
       float ratio = Math.max(0.01f, s.ribbonWidthRatio);
 
-      // Draw in batches of segments to stay well within internal buffers
+      // Draw in batches of segments using custom shader
       int i = 0;
       final int maxSegmentsPerBatch = 2500; // 2500 * 6 = 15000 verts
       float cumV = 0f; // cumulative V length across batches
       while (i < n - 1) {
         int end = Math.min(n - 1, i + maxSegmentsPerBatch);
         float vLen = 0f; // accumulate along centerline (V axis) for this batch
-        if (tex != null) {
-          im.begin(cam.combined, GL20.GL_TRIANGLES);
-          for (int k = i; k < end; k++) {
-            float clx0 = 0.5f * (lx[k] + rx[k]);
-            float clz0 = 0.5f * (lz[k] + rz[k]);
-            float clx1 = 0.5f * (lx[k+1] + rx[k+1]);
-            float clz1 = 0.5f * (lz[k+1] + rz[k+1]);
-            float ax = clx0, az = clz0;
-            float bx = clx1, bz = clz1;
-            float du = (float)Math.sqrt((bx-ax)*(bx-ax) + (bz-az)*(bz-az));
-            float v2 = vLen + du / Math.max(0.1f, s.width);
-            tex.bind();
-            // tri 1
-            float nlx0 = ax + (lx[k]   - ax) * ratio; float nlz0 = az + (lz[k]   - az) * ratio;
-            float nrx0 = ax + (rx[k]   - ax) * ratio; float nrz0 = az + (rz[k]   - az) * ratio;
-            float nlx1 = bx + (lx[k+1] - bx) * ratio; float nlz1 = bz + (lz[k+1] - bz) * ratio;
-            float nrx1 = bx + (rx[k+1] - bx) * ratio; float nrz1 = bz + (rz[k+1] - bz) * ratio;
-            im.texCoord(0f, cumV + vLen); im.color(rr,gg,bb,aa); im.vertex(nlx0, ly[k]   +yLift, nlz0);
-            im.texCoord(1f, cumV + vLen); im.color(rr,gg,bb,aa); im.vertex(nrx0, ry[k]   +yLift, nrz0);
-            im.texCoord(0f, cumV + v2);   im.color(rr,gg,bb,aa); im.vertex(nlx1, ly[k+1] +yLift, nlz1);
-            // tri 2
-            im.texCoord(1f, cumV + vLen); im.color(rr,gg,bb,aa); im.vertex(nrx0, ry[k]   +yLift, nrz0);
-            im.texCoord(1f, cumV + v2);   im.color(rr,gg,bb,aa); im.vertex(nrx1, ry[k+1] +yLift, nrz1);
-            im.texCoord(0f, cumV + v2);   im.color(rr,gg,bb,aa); im.vertex(nlx1, ly[k+1] +yLift, nlz1);
-            vLen = v2;
-          }
-          im.end();
-        } else {
-          // Ensure no texture is bound to avoid sampling birds or other layers
-          Gdx.gl.glBindTexture(GL20.GL_TEXTURE_2D, 0);
-          imSolid.begin(cam.combined, GL20.GL_TRIANGLES);
-          for (int k = i; k < end; k++) {
-            float clx0 = 0.5f * (lx[k] + rx[k]);
-            float clz0 = 0.5f * (lz[k] + rz[k]);
-            float clx1 = 0.5f * (lx[k+1] + rx[k+1]);
-            float clz1 = 0.5f * (lz[k+1] + rz[k+1]);
-            float ax = clx0, az = clz0;
-            float bx = clx1, bz = clz1;
-            float du = (float)Math.sqrt((bx-ax)*(bx-ax) + (bz-az)*(bz-az));
-            float v2 = vLen + du / Math.max(0.1f, s.width);
-            // tri 1
-            float nlx0 = ax + (lx[k]   - ax) * ratio; float nlz0 = az + (lz[k]   - az) * ratio;
-            float nrx0 = ax + (rx[k]   - ax) * ratio; float nrz0 = az + (rz[k]   - az) * ratio;
-            float nlx1 = bx + (lx[k+1] - bx) * ratio; float nlz1 = bz + (lz[k+1] - bz) * ratio;
-            float nrx1 = bx + (rx[k+1] - bx) * ratio; float nrz1 = bz + (rz[k+1] - bz) * ratio;
-            imSolid.color(rr,gg,bb,aa); imSolid.vertex(nlx0, ly[k]   +yLift, nlz0);
-            imSolid.color(rr,gg,bb,aa); imSolid.vertex(nrx0, ry[k]   +yLift, nrz0);
-            imSolid.color(rr,gg,bb,aa); imSolid.vertex(nlx1, ly[k+1] +yLift, nlz1);
-            // tri 2
-            imSolid.color(rr,gg,bb,aa); imSolid.vertex(nrx0, ry[k]   +yLift, nrz0);
-            imSolid.color(rr,gg,bb,aa); imSolid.vertex(nrx1, ry[k+1] +yLift, nrz1);
-            imSolid.color(rr,gg,bb,aa); imSolid.vertex(nlx1, ly[k+1] +yLift, nlz1);
-            vLen = v2;
-          }
-          imSolid.end();
+        // Build vertices for batch into a float array: (x,y,z,r,g,b,a,u,v)
+        int segs = end - i;
+        int vertsCount = segs * 6; // 2 triangles per segment
+        int stride = 9;
+        float[] verts = new float[vertsCount * stride];
+        int idx = 0;
+        for (int k = i; k < end; k++) {
+          float clx0 = 0.5f * (lx[k] + rx[k]);
+          float clz0 = 0.5f * (lz[k] + rz[k]);
+          float clx1 = 0.5f * (lx[k+1] + rx[k+1]);
+          float clz1 = 0.5f * (lz[k+1] + rz[k+1]);
+          float ax = clx0, az = clz0;
+          float bx = clx1, bz = clz1;
+          float du = (float)Math.sqrt((bx-ax)*(bx-ax) + (bz-az)*(bz-az));
+          float v2 = vLen + du / Math.max(0.1f, s.width);
+          float nlx0 = ax + (lx[k]   - ax) * ratio; float nlz0 = az + (lz[k]   - az) * ratio;
+          float nrx0 = ax + (rx[k]   - ax) * ratio; float nrz0 = az + (rz[k]   - az) * ratio;
+          float nlx1 = bx + (lx[k+1] - bx) * ratio; float nlz1 = bz + (lz[k+1] - bz) * ratio;
+          float nrx1 = bx + (rx[k+1] - bx) * ratio; float nrz1 = bz + (rz[k+1] - bz) * ratio;
+          // tri 1: (left0, right0, left1)
+          idx = putVert(verts, idx, nlx0, ly[k]   +yLift, nlz0, rr,gg,bb,aa, 0f, cumV + vLen);
+          idx = putVert(verts, idx, nrx0, ry[k]   +yLift, nrz0, rr,gg,bb,aa, 1f, cumV + vLen);
+          idx = putVert(verts, idx, nlx1, ly[k+1] +yLift, nlz1, rr,gg,bb,aa, 0f, cumV + v2);
+          // tri 2: (right0, right1, left1)
+          idx = putVert(verts, idx, nrx0, ry[k]   +yLift, nrz0, rr,gg,bb,aa, 1f, cumV + vLen);
+          idx = putVert(verts, idx, nrx1, ry[k+1] +yLift, nrz1, rr,gg,bb,aa, 1f, cumV + v2);
+          idx = putVert(verts, idx, nlx1, ly[k+1] +yLift, nlz1, rr,gg,bb,aa, 0f, cumV + v2);
+          vLen = v2;
+        }
+        // Draw with water shader
+        if (waterShader != null && waterShader.isCompiled()) {
+          ribbonMesh.setVertices(verts, 0, verts.length);
+          waterShader.bind();
+          waterShader.setUniformMatrix("u_projTrans", cam.combined);
+          waterShader.setUniformf("u_time", timeAccum);
+          ribbonMesh.render(waterShader, GL20.GL_TRIANGLES);
         }
         i = end;
         cumV += vLen;
@@ -553,6 +586,13 @@ public final class RiverTool implements Tool {
       Gdx.gl.glEnable(GL20.GL_DEPTH_TEST);
     }
     Gdx.gl.glDisable(GL20.GL_BLEND);
+  }
+
+  private static int putVert(float[] arr, int idx, float x, float y, float z, float r, float g, float b, float a, float u, float v) {
+    arr[idx++] = x; arr[idx++] = y; arr[idx++] = z;
+    arr[idx++] = r; arr[idx++] = g; arr[idx++] = b; arr[idx++] = a;
+    arr[idx++] = u; arr[idx++] = v;
+    return idx;
   }
 
   private com.badlogic.gdx.utils.Array<String> buildNodeLabels(TerrainSpline s) {

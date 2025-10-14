@@ -11,6 +11,10 @@ import com.example.game.World.Editor.Tools.Splines.RiverTool;
 import com.example.game.World.Splines.TerrainSpline;
 import com.example.game.World.Splines.TerrainSplineNode;
 import com.example.game.World.TerrainSystem;
+import com.badlogic.gdx.graphics.glutils.ShaderProgram;
+import com.badlogic.gdx.graphics.Mesh;
+import com.badlogic.gdx.graphics.VertexAttribute;
+import com.badlogic.gdx.graphics.VertexAttributes;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -31,6 +35,11 @@ public final class SplinesLayer extends BaseToolLayer {
   // Selection shared across tools
   private TerrainSpline selectedSpline = null;
   private int selectedNode = -1;
+
+  // Water shader for rivers (always on, independent of tool)
+  private ShaderProgram waterShader;
+  private Mesh ribbonMesh;
+  private float timeAccum = 0f;
 
   // Dedicated texture set for splines (names only for now; could be actual textures later)
   private final List<String> splineTextureNames = new ArrayList<>();
@@ -57,11 +66,7 @@ public final class SplinesLayer extends BaseToolLayer {
       splines.clear();
       splines.addAll(getCatalogSnapshot());
     }
-    // Kick off a ribbon rebuild for visibility; TerrainSpline will defer if terrain not ready
-    for (TerrainSpline s : getSplines()) { s.markRibbonDirty(); s.rebuildRibbonAsync(this.terrain.getBaseHeightSampler(), 2); }
 
-    // Then refine to only those intersecting currently loaded chunks
-    resyncActiveSplinesAsync();
 
     // When chunks change, rebuild ribbons and resync active set (additive listener)
     this.terrain.addChunksChangedListener(() -> {
@@ -83,6 +88,33 @@ public final class SplinesLayer extends BaseToolLayer {
       // Stage latest catalog so a subsequent save writes splines into the map
       saveSplinesToMap();
     });
+
+    // Compile water shader (procedural flow) for rivers
+    ShaderProgram.pedantic = false;
+    String vert =
+      "attribute vec3 a_position;\n"+
+      "attribute vec4 a_color;\n"+
+      "attribute vec2 a_texCoord0;\n"+
+      "uniform mat4 u_projTrans;\n"+
+      "varying vec4 v_color;\n"+
+      "varying vec2 v_uv;\n"+
+      "void main(){ v_color=a_color; v_uv=a_texCoord0; gl_Position=u_projTrans*vec4(a_position,1.0); }";
+    String frag =
+      "#ifdef GL_ES\nprecision mediump float;\n#endif\n"+
+      "varying vec4 v_color; varying vec2 v_uv; uniform float u_time;\n"+
+      "void main(){ float u=clamp(v_uv.x,0.0,1.0); float v=v_uv.y + u_time*0.15;\n"+
+      "vec3 base=vec3(0.08,0.50,1.00); float w1=sin(v*10.0+u*6.2831); float w2=sin(v*21.0+(1.0-u)*3.1416);\n"+
+      "float flow=0.5+0.5*w1*0.6+0.5*w2*0.4; float edge=min(u,1.0-u); float foam=smoothstep(0.2,0.0,edge); foam*=0.6+0.4*sin(v*30.0);\n"+
+      "vec3 col=base*mix(0.6,1.1,flow); col=mix(col, vec3(1.0), clamp(foam,0.0,1.0)); gl_FragColor=vec4(col*v_color.rgb, v_color.a); }";
+    waterShader = new ShaderProgram(vert, frag);
+    if (!waterShader.isCompiled()) {
+      com.badlogic.gdx.Gdx.app.error("SplinesLayer", "Water shader compile error: "+waterShader.getLog());
+    }
+    ribbonMesh = new Mesh(true, 15000, 0,
+      new VertexAttribute(VertexAttributes.Usage.Position, 3, "a_position"),
+      new VertexAttribute(VertexAttributes.Usage.ColorUnpacked, 4, "a_color"),
+      new VertexAttribute(VertexAttributes.Usage.TextureCoordinates, 2, "a_texCoord0")
+    );
   }
 
   // ---------------- Ribbon-only rendering (no overlays) ----------------
@@ -97,37 +129,69 @@ public final class SplinesLayer extends BaseToolLayer {
       if (s.isRibbonDirty() && !s.isRibbonRebuilding()) {
         s.rebuildRibbonAsync(this.terrain.getBaseHeightSampler(), 2);
       }
-      if (s.getType() != TerrainSpline.Type.RIVER && s.getType() != TerrainSpline.Type.ROAD) continue;
+      if (s.getType() == TerrainSpline.Type.RIVER) {
+        if (!s.hasRibbon()) continue;
+        // Always render water shader for rivers
+        float aa = Math.max(0f, Math.min(1f, s.transparency));
+        float[] sunTint = computeSunTint(); float rr = sunTint[0], gg = sunTint[1], bb = sunTint[2];
+        float[] lx = s.getLX(), ly = s.getLY(), lz = s.getLZ();
+        float[] rx = s.getRX(), ry = s.getRY(), rz = s.getRZ();
+        int n = s.getTriPairs() + 1;
+        float yLift = s.heightOffset + 0.02f;
+        float ratio = Math.max(0.01f, s.ribbonWidthRatio);
+        int i = 0; final int maxSegmentsPerBatch = 2500; float cumV = 0f;
+        timeAccum += com.badlogic.gdx.Gdx.graphics.getDeltaTime();
+        while (i < n - 1) {
+          int end = Math.min(n - 1, i + maxSegmentsPerBatch);
+          float vLen = 0f;
+          int segs = end - i; int vertsCount = segs * 6; int stride = 9; float[] verts = new float[vertsCount * stride]; int idx = 0;
+          for (int k = i; k < end; k++) {
+            float clx0 = 0.5f * (lx[k] + rx[k]); float clz0 = 0.5f * (lz[k] + rz[k]);
+            float clx1 = 0.5f * (lx[k+1] + rx[k+1]); float clz1 = 0.5f * (lz[k+1] + rz[k+1]);
+            float ax = clx0, az = clz0; float bx = clx1, bz = clz1;
+            float du = (float)Math.sqrt((bx-ax)*(bx-ax) + (bz-az)*(bz-az)); float v2 = vLen + du / Math.max(0.1f, s.width);
+            float nlx0 = ax + (lx[k]   - ax) * ratio; float nlz0 = az + (lz[k]   - az) * ratio;
+            float nrx0 = ax + (rx[k]   - ax) * ratio; float nrz0 = az + (rz[k]   - az) * ratio;
+            float nlx1 = bx + (lx[k+1] - bx) * ratio; float nlz1 = bz + (lz[k+1] - bz) * ratio;
+            float nrx1 = bx + (rx[k+1] - bx) * ratio; float nrz1 = bz + (rz[k+1] - bz) * ratio;
+            idx = putVert(verts, idx, nlx0, ly[k]   +yLift, nlz0, rr,gg,bb,aa, 0f, cumV + vLen);
+            idx = putVert(verts, idx, nrx0, ry[k]   +yLift, nrz0, rr,gg,bb,aa, 1f, cumV + vLen);
+            idx = putVert(verts, idx, nlx1, ly[k+1] +yLift, nlz1, rr,gg,bb,aa, 0f, cumV + v2);
+            idx = putVert(verts, idx, nrx0, ry[k]   +yLift, nrz0, rr,gg,bb,aa, 1f, cumV + vLen);
+            idx = putVert(verts, idx, nrx1, ry[k+1] +yLift, nrz1, rr,gg,bb,aa, 1f, cumV + v2);
+            idx = putVert(verts, idx, nlx1, ly[k+1] +yLift, nlz1, rr,gg,bb,aa, 0f, cumV + v2);
+            vLen = v2;
+          }
+          if (waterShader != null && waterShader.isCompiled()) {
+            ribbonMesh.setVertices(verts, 0, verts.length);
+            waterShader.bind();
+            waterShader.setUniformMatrix("u_projTrans", cam.combined);
+            waterShader.setUniformf("u_time", timeAccum);
+            ribbonMesh.render(waterShader, com.badlogic.gdx.graphics.GL20.GL_TRIANGLES);
+          }
+          i = end; cumV += vLen;
+        }
+        continue; // done with this spline
+      }
+      // Roads: keep textured rendering as before
+      if (s.getType() != TerrainSpline.Type.ROAD) continue;
       if (!s.hasRibbon()) continue;
-      // Only render textured ribbons here. Non-textured (helper) ribbons are shown exclusively in RiverTool.
       if (!s.textured) continue;
       float aa = Math.max(0f, Math.min(1f, s.transparency));
       com.badlogic.gdx.graphics.Texture tex = getSplineTexture(s.textureId);
-      float rr, gg, bb;
-      float[] sunTint = computeSunTint(); rr = sunTint[0]; gg = sunTint[1]; bb = sunTint[2];
-
-      float[] lx = s.getLX(), ly = s.getLY(), lz = s.getLZ();
-      float[] rx = s.getRX(), ry = s.getRY(), rz = s.getRZ();
-      int n = s.getTriPairs() + 1;
-      float yLift = s.heightOffset + 0.02f;
-      float ratio = Math.max(0.01f, s.ribbonWidthRatio);
-
-      int i = 0; final int maxSegmentsPerBatch = 2500;
-      float cumV = 0f;
+      float rr, gg, bb; float[] sunTint = computeSunTint(); rr = sunTint[0]; gg = sunTint[1]; bb = sunTint[2];
+      float[] lx = s.getLX(), ly = s.getLY(), lz = s.getLZ(); float[] rx = s.getRX(), ry = s.getRY(), rz = s.getRZ();
+      int n = s.getTriPairs() + 1; float yLift = s.heightOffset + 0.02f; float ratio = Math.max(0.01f, s.ribbonWidthRatio);
+      int i = 0; final int maxSegmentsPerBatch = 2500; float cumV = 0f;
       while (i < n - 1) {
-        int end = Math.min(n - 1, i + maxSegmentsPerBatch);
-        float vLen = 0f;
+        int end = Math.min(n - 1, i + maxSegmentsPerBatch); float vLen = 0f;
         if (tex != null) {
           im.begin(cam.combined, com.badlogic.gdx.graphics.GL20.GL_TRIANGLES);
           for (int k = i; k < end; k++) {
-            float clx0 = 0.5f * (lx[k] + rx[k]);
-            float clz0 = 0.5f * (lz[k] + rz[k]);
-            float clx1 = 0.5f * (lx[k+1] + rx[k+1]);
-            float clz1 = 0.5f * (lz[k+1] + rz[k+1]);
-            float ax = clx0, az = clz0;
-            float bx = clx1, bz = clz1;
-            float du = (float)Math.sqrt((bx-ax)*(bx-ax) + (bz-az)*(bz-az));
-            float v2 = vLen + du / Math.max(0.1f, s.width);
+            float clx0 = 0.5f * (lx[k] + rx[k]); float clz0 = 0.5f * (lz[k] + rz[k]);
+            float clx1 = 0.5f * (lx[k+1] + rx[k+1]); float clz1 = 0.5f * (lz[k+1] + rz[k+1]);
+            float ax = clx0, az = clz0; float bx = clx1, bz = clz1;
+            float du = (float)Math.sqrt((bx-ax)*(bx-ax) + (bz-az)*(bz-az)); float v2 = vLen + du / Math.max(0.1f, s.width);
             tex.bind();
             float nlx0 = ax + (lx[k]   - ax) * ratio; float nlz0 = az + (lz[k]   - az) * ratio;
             float nrx0 = ax + (rx[k]   - ax) * ratio; float nrz0 = az + (rz[k]   - az) * ratio;
@@ -143,8 +207,7 @@ public final class SplinesLayer extends BaseToolLayer {
           }
           im.end();
         }
-        i = end;
-        cumV += vLen;
+        i = end; cumV += vLen;
       }
     }
     com.badlogic.gdx.Gdx.gl.glDisable(com.badlogic.gdx.graphics.GL20.GL_BLEND);
@@ -193,6 +256,16 @@ public final class SplinesLayer extends BaseToolLayer {
     float b = coolB + (warmB - coolB) * warmth;
     r *= intensity; g *= intensity; b *= intensity;
     return new float[]{ r, g, b };
+  }
+
+  // Helper for river rendering: pack one vertex into the interleaved buffer
+  private static int putVert(float[] arr, int idx, float x, float y, float z,
+                              float r, float g, float b, float a,
+                              float u, float v) {
+    arr[idx++] = x; arr[idx++] = y; arr[idx++] = z;
+    arr[idx++] = r; arr[idx++] = g; arr[idx++] = b; arr[idx++] = a;
+    arr[idx++] = u; arr[idx++] = v;
+    return idx;
   }
 
   public List<TerrainSpline> getSplines() {
