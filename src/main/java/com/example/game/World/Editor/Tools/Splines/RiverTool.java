@@ -50,7 +50,7 @@ public final class RiverTool implements Tool {
   // Newly tracked so values update when selection changes
   private Slider alphaSliderRef; private Label alphaLabelRef;
   private Slider hOffSliderRef; private Label hOffLabelRef;
-  private CheckBox texturedCBRef; private TextButton selectTexBtnRef; private Label texLabelRef;
+  private CheckBox reverseFlowCBRef;
   private com.badlogic.gdx.scenes.scene2d.ui.List<String> nodeList;
 
   public RiverTool(SplinesLayer layer, TerrainSystem terrain) {
@@ -206,37 +206,17 @@ public final class RiverTool implements Tool {
     ht.add(hOffSliderRef).width(240).row();
     container.add(ht).left().padBottom(8).row();
 
-    // Textured toggle + Texture select using the shared TextureBrowser (open in textures/splines)
+    // Reverse flow toggle (persisted per river)
     Table t = new Table();
     t.defaults().left().padRight(6);
-    texturedCBRef = new CheckBox(" Textured", skin);
-    texturedCBRef.setChecked(sel == null ? true : sel.textured);
-    texturedCBRef.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
-      TerrainSpline s = layer.getSelectedSpline(); if (s == null) return;
-      s.textured = texturedCBRef.isChecked();
-      // Reset texture id to a known default on any toggle (both enable and disable)
-      s.textureId = 0;
-      if (texLabelRef != null) texLabelRef.setText("Texture: " + currentTextureLabel(s));
-      if (selectTexBtnRef != null) selectTexBtnRef.setDisabled(!s.textured);
+    reverseFlowCBRef = new CheckBox(" Reverse flow", skin);
+    reverseFlowCBRef.setChecked(sel != null && sel.reverseFlow);
+    reverseFlowCBRef.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+      TerrainSpline s = layer.getSelectedSpline(); if (s == null || s.getType()!=TerrainSpline.Type.RIVER) return;
+      s.reverseFlow = reverseFlowCBRef.isChecked();
       layer.saveSplinesToMap();
     }});
-    texLabelRef = new Label("Texture: " + currentTextureLabel(sel), skin);
-    selectTexBtnRef = new TextButton("Select Texture...", skin);
-    if (sel != null) selectTexBtnRef.setDisabled(!sel.textured);
-    selectTexBtnRef.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
-      com.example.game.World.Editor.TextureBrowser tb = new com.example.game.World.Editor.TextureBrowser(skin, terrain, "splines", tr -> {
-        TerrainSpline s = layer.getSelectedSpline();
-        if (s == null) return;
-        s.textureId = tr.id; s.textured = true;
-        if (texLabelRef != null) texLabelRef.setText("Texture: " + currentTextureLabel(s));
-        if (texturedCBRef != null) texturedCBRef.setChecked(true);
-        layer.saveSplinesToMap();
-      });
-      if (container.getStage() != null) tb.show(container.getStage());
-    }});
-    t.add(texturedCBRef);
-    t.add(texLabelRef);
-    t.add(selectTexBtnRef);
+    t.add(reverseFlowCBRef);
     container.add(t).left().row();
 
     // Nodes list (always visible; contents depend on selected spline)
@@ -341,9 +321,7 @@ public final class RiverTool implements Tool {
         if (hOffLabelRef != null) { hOffLabelRef.setText(String.format("Height Offset: %.2f m", spline.heightOffset)); }
         if (ribbonRatioSlider != null) { ribbonRatioSlider.setValue(spline.ribbonWidthRatio); }
         if (ribbonRatioLabel != null) { ribbonRatioLabel.setText(String.format("Ribbon overflow: %.2f", spline.ribbonWidthRatio)); }
-        if (texturedCBRef != null) texturedCBRef.setChecked(spline.textured);
-        if (selectTexBtnRef != null) selectTexBtnRef.setDisabled(!spline.textured);
-        if (texLabelRef != null) texLabelRef.setText("Texture: " + currentTextureLabel(spline));
+        if (reverseFlowCBRef != null) reverseFlowCBRef.setChecked(spline.reverseFlow);
         return;
       }
       // Ray-vs-AABB picking (ignores terrain); uses current mouse screen coords
@@ -366,9 +344,7 @@ public final class RiverTool implements Tool {
           if (hOffLabelRef != null) { hOffLabelRef.setText(String.format("Height Offset: %.2f m", ssel.heightOffset)); }
           if (ribbonRatioSlider != null) { ribbonRatioSlider.setValue(ssel.ribbonWidthRatio); }
           if (ribbonRatioLabel != null) { ribbonRatioLabel.setText(String.format("Ribbon overflow: %.2f", ssel.ribbonWidthRatio)); }
-          if (texturedCBRef != null) texturedCBRef.setChecked(ssel.textured);
-          if (selectTexBtnRef != null) selectTexBtnRef.setDisabled(!ssel.textured);
-          if (texLabelRef != null) texLabelRef.setText("Texture: " + currentTextureLabel(ssel));
+          if (reverseFlowCBRef != null) reverseFlowCBRef.setChecked(ssel.reverseFlow);
         }
       }
       else { 
@@ -403,14 +379,9 @@ public final class RiverTool implements Tool {
         ribbonRatioSlider.setValue(cur.ribbonWidthRatio);
         if (ribbonRatioLabel != null) ribbonRatioLabel.setText(String.format("Ribbon overflow: %.2f", cur.ribbonWidthRatio));
       }
-      // Sync textured checkbox and enforce textureId=0 when untextured
-      if (texturedCBRef != null && texturedCBRef.isChecked() != cur.textured) {
-        texturedCBRef.setChecked(cur.textured);
-      }
-      if (selectTexBtnRef != null) selectTexBtnRef.setDisabled(cur == null || !cur.textured);
-      if (cur != null && !cur.textured && cur.textureId != 0) {
-        cur.textureId = 0;
-        if (texLabelRef != null) texLabelRef.setText("Texture: " + currentTextureLabel(cur));
+      // Sync reverse flow checkbox
+      if (reverseFlowCBRef != null && reverseFlowCBRef.isChecked() != cur.reverseFlow) {
+        reverseFlowCBRef.setChecked(cur.reverseFlow);
       }
     }
 

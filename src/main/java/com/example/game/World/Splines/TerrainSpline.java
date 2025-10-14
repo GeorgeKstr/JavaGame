@@ -23,6 +23,7 @@ public class TerrainSpline implements Placeable {
   public float heightOffset = 0f;   // meters; rendering-only vertical offset for ribbon
   public boolean textured = true;   // whether to render with texture; if false, solid color helper ribbon
   public float ribbonWidthRatio = 1.0f; // scales visual ribbon width relative to river width (1=match, >1 overflow)
+  public boolean reverseFlow = false; // when true, reverse the flow direction for rivers
 
   // placeable metadata
   private String name = "new spline";

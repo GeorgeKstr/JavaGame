@@ -89,23 +89,10 @@ public final class SplinesLayer extends BaseToolLayer {
       saveSplinesToMap();
     });
 
-    // Compile water shader (procedural flow) for rivers
+    // Compile water shader from GLSL files
     ShaderProgram.pedantic = false;
-    String vert =
-      "attribute vec3 a_position;\n"+
-      "attribute vec4 a_color;\n"+
-      "attribute vec2 a_texCoord0;\n"+
-      "uniform mat4 u_projTrans;\n"+
-      "varying vec4 v_color;\n"+
-      "varying vec2 v_uv;\n"+
-      "void main(){ v_color=a_color; v_uv=a_texCoord0; gl_Position=u_projTrans*vec4(a_position,1.0); }";
-    String frag =
-      "#ifdef GL_ES\nprecision mediump float;\n#endif\n"+
-      "varying vec4 v_color; varying vec2 v_uv; uniform float u_time;\n"+
-      "void main(){ float u=clamp(v_uv.x,0.0,1.0); float v=v_uv.y + u_time*0.15;\n"+
-      "vec3 base=vec3(0.08,0.50,1.00); float w1=sin(v*10.0+u*6.2831); float w2=sin(v*21.0+(1.0-u)*3.1416);\n"+
-      "float flow=0.5+0.5*w1*0.6+0.5*w2*0.4; float edge=min(u,1.0-u); float foam=smoothstep(0.2,0.0,edge); foam*=0.6+0.4*sin(v*30.0);\n"+
-      "vec3 col=base*mix(0.6,1.1,flow); col=mix(col, vec3(1.0), clamp(foam,0.0,1.0)); gl_FragColor=vec4(col*v_color.rgb, v_color.a); }";
+    String vert = com.badlogic.gdx.Gdx.files.classpath("shaders/water.vert.glsl").readString();
+    String frag = com.badlogic.gdx.Gdx.files.classpath("shaders/water.frag.glsl").readString();
     waterShader = new ShaderProgram(vert, frag);
     if (!waterShader.isCompiled()) {
       com.badlogic.gdx.Gdx.app.error("SplinesLayer", "Water shader compile error: "+waterShader.getLog());
@@ -167,6 +154,17 @@ public final class SplinesLayer extends BaseToolLayer {
             waterShader.bind();
             waterShader.setUniformMatrix("u_projTrans", cam.combined);
             waterShader.setUniformf("u_time", timeAccum);
+            // camera position
+            waterShader.setUniformf("u_camPos", cam.position);
+            // sun direction and colors
+            com.badlogic.gdx.math.Vector3 sd = computeSunDir();
+            waterShader.setUniformf("u_sunDir", sd);
+            // sky and sun colors (approximate)
+            float[] sky = computeSunTint();
+            waterShader.setUniformf("u_skyColor", sky[0], sky[1], sky[2]);
+            waterShader.setUniformf("u_sunColor", 1.0f, 0.95f, 0.85f);
+            // flow direction toggle
+            waterShader.setUniformf("u_reverseFlow", s.reverseFlow ? 1f : 0f);
             ribbonMesh.render(waterShader, com.badlogic.gdx.graphics.GL20.GL_TRIANGLES);
           }
           i = end; cumV += vLen;
@@ -258,6 +256,24 @@ public final class SplinesLayer extends BaseToolLayer {
     return new float[]{ r, g, b };
   }
 
+  // Approximate sun direction in world space from time-of-day settings.
+  // Returns a unit vector pointing FROM the sun TOWARD the world (i.e., a light direction).
+  private com.badlogic.gdx.math.Vector3 computeSunDir() {
+    float hour = com.example.game.Config.cvar.CVars.RENDER_TIME_OF_DAY.get();
+    float t = (hour % 24f) / 24f;
+    float az = (float)(t * Math.PI * 2.0); // azimuth: 0 north, π/2 east, π south, 3π/2 west
+    float maxElevDeg = 75f;
+    float maxElevRad = (float)(Math.toRadians(maxElevDeg));
+    float elev = (float)(maxElevRad * Math.sin(az - Math.PI * 0.5));
+    float ce = (float)Math.cos(elev);
+    float se = (float)Math.sin(elev);
+    float sa = (float)Math.sin(az);
+    float ca = (float)Math.cos(az);
+    // Use az mapping consistent with EditorScreen: X=sin(az) (east at π/2), Z=cos(az) (north at 0)
+    com.badlogic.gdx.math.Vector3 dir = new com.badlogic.gdx.math.Vector3(ce * sa, se, ce * ca);
+    return dir.nor();
+  }
+
   // Helper for river rendering: pack one vertex into the interleaved buffer
   private static int putVert(float[] arr, int idx, float x, float y, float z,
                               float r, float g, float b, float a,
@@ -336,6 +352,7 @@ public final class SplinesLayer extends BaseToolLayer {
         .append(",\"heightOffset\":").append(s.heightOffset)
         .append(",\"textured\":").append(s.textured)
         .append(",\"ribbonWidthRatio\":").append(s.ribbonWidthRatio)
+        .append(",\"reverseFlow\":").append(s.reverseFlow)
         .append(",\"nodes\":[");
       java.util.List<com.example.game.World.Splines.TerrainSplineNode> nodes = s.getNodes();
       for (int j=0;j<nodes.size();j++) {
@@ -377,6 +394,7 @@ public final class SplinesLayer extends BaseToolLayer {
       ts.heightOffset = s.getFloat("heightOffset", ts.heightOffset);
       ts.textured = s.getBoolean("textured", true);
       ts.ribbonWidthRatio = s.getFloat("ribbonWidthRatio", ts.ribbonWidthRatio);
+      ts.reverseFlow = s.getBoolean("reverseFlow", false);
       com.badlogic.gdx.utils.JsonValue nodes = s.get("nodes");
       if (nodes != null) {
         for (com.badlogic.gdx.utils.JsonValue n : nodes) {
