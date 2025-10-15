@@ -12,6 +12,7 @@ public final class EditorContext {
 
   private static volatile Camera camera;   // set once on Screen.show(), updated by EditorCamera
   private static volatile com.example.game.World.Placeable selectedPlaceable; // currently selected placeable (optional)
+  private static final Vector3 focusPos = new Vector3(); // camera pivot (rotation axis)
 
   private EditorContext() {}
 
@@ -51,6 +52,20 @@ public final class EditorContext {
   public static boolean isCameraValid() {
     Camera cam = camera;
     return cam != null && cam.viewportWidth == Gdx.graphics.getWidth() && cam.viewportHeight == Gdx.graphics.getHeight();
+  }
+
+  // -------------------
+  // Camera focus (rotation axis) tracking
+  // -------------------
+  /** Update the editor camera focus/pivot position (world space). */
+  public static void setFocusPosition(Vector3 worldPos) {
+    if (worldPos != null) focusPos.set(worldPos);
+  }
+
+  /** Get the current focus/pivot position (world space). */
+  public static Vector3 getFocusPosition(Vector3 out) {
+    if (out == null) return null;
+    return out.set(focusPos);
   }
 
   // -------------------

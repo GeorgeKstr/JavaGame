@@ -365,7 +365,7 @@ public class EditorScreen implements Screen {
     // Apply initial render toggles
     terrain.setWireframe(Boolean.TRUE.equals(CVars.RENDER_TERRAIN_WIREFRAME.get()));
     terrain.setChunkGrid(Boolean.TRUE.equals(CVars.RENDER_TERRAIN_CHUNK_GRID.get()));
-
+    this.edCam.setHeightSampler(terrain.getBaseHeightSampler());
     // Initial values from CVars (kept in sync with Settings)
     hour = CVars.RENDER_TIME_OF_DAY.get();
     updateSunFromHour();

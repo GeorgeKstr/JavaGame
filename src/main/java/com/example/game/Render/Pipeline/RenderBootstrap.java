@@ -45,11 +45,18 @@ public final class RenderBootstrap {
     // Rays exposure
     rays.setExposure(cfg.raysExposure);
 
-    // Pipeline order: sky → terrain → rays → birds (birds on top of shafts)
+    // Editor marker (on-top ring at camera ground point)
+    EditorMarkerPass marker = new EditorMarkerPass(terrain.getBaseHeightSampler());
+    marker.init();
+    marker.setRadius(1.1f);
+    marker.setThickness(0.10f);
+
+    // Pipeline order: sky → terrain → rays → birds → marker (marker on top of everything)
     return new RenderPipeline()
         .add(sky)
         .add(terrainPass)
         .add(rays)
-        .add(birds);
+        .add(birds)
+        .add(marker);
   }
 }

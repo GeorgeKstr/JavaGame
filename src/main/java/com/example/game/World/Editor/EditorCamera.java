@@ -2,9 +2,11 @@ package com.example.game.World.Editor;
 
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.graphics.Camera;
+import com.badlogic.gdx.graphics.PerspectiveCamera;
 import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Vector3;
 import com.example.game.Config.Settings;
+import com.example.game.World.HeightSampler;
 
 /**
  * Simple orbital editor camera controller.
@@ -17,6 +19,7 @@ import com.example.game.Config.Settings;
 public final class EditorCamera {
 
   private final Settings settings;
+  private HeightSampler heightSampler; // optional, for ground clamping
 
   // Spherical state around pivot
   private final Vector3 pivot = new Vector3(0, 0, 0);
@@ -26,7 +29,7 @@ public final class EditorCamera {
 
   // Tunables
   private float orbitSens = 0.2f;       // pixels → degrees
-  private float panFactor = 0.0030f;    // pixels → world units (scaled by distance)
+  private float panFactor = 0.0030f;    // fallback scaling when FOV unknown
   private float zoomFactor = 0.1f;      // scroll multiplier (expo)
 
   // Scratch
@@ -37,6 +40,9 @@ public final class EditorCamera {
   public EditorCamera(Settings settings) {
     this.settings = settings;
   }
+
+  /** Provide terrain sampler to enable ground clamping logic. */
+  public void setHeightSampler(HeightSampler sampler) { this.heightSampler = sampler; }
 
   /** Current world-space focus/pivot. */
   public Vector3 focus() { return pivot; }
@@ -57,8 +63,19 @@ public final class EditorCamera {
     right.set(cam.direction).crs(cam.up).nor();
     up.set(right).crs(cam.direction).nor();
 
-    float s = Math.max(0.001f, distance) * panFactor;
-    pivot.mulAdd(right, -dx * s).mulAdd(up, dy * s);
+    // Map screen pixels to world units at current depth using FOV for more accurate dragging
+    if (cam instanceof PerspectiveCamera pc) {
+      float tanHalfY = MathUtils.tanDeg(pc.fieldOfView * 0.5f);
+      float aspect   = (float)Gdx.graphics.getWidth() / (float)Gdx.graphics.getHeight();
+      float tanHalfX = tanHalfY * aspect;
+      // World height of one screen at current depth ~ 2 * depth * tan(fov/2)
+      float worldPerPixelY = (2f * distance * tanHalfY) / Math.max(1, Gdx.graphics.getHeight());
+      float worldPerPixelX = (2f * distance * tanHalfX) / Math.max(1, Gdx.graphics.getWidth());
+      pivot.mulAdd(right, -dx * worldPerPixelX).mulAdd(up, dy * worldPerPixelY);
+    } else {
+      float s = Math.max(0.001f, distance) * panFactor;
+      pivot.mulAdd(right, -dx * s).mulAdd(up, dy * s);
+    }
   }
 
   /** Scroll (positive = zoom out by default). */
@@ -87,7 +104,11 @@ public final class EditorCamera {
     if (d) delta.add(rgt);
 
     if (!delta.isZero()) {
-      delta.nor().scl(-dt*base*zoomFactor*distance*0.1f); // scale by distance
+      // Ensure reasonable speed at close range; behave a bit faster than walking when fully zoomed in
+      float minEffDist = 12f; // meters
+      float effDist = Math.max(distance, minEffDist);
+      float speed = dt * base * 1.25f * zoomFactor * effDist * 0.1f;
+      delta.nor().scl(-speed);
       pivot.add(delta);
     }
   }
@@ -105,10 +126,26 @@ public final class EditorCamera {
       -MathUtils.cos(yawRad) * cp
     ).nor();
 
+    // Optionally snap pivot.y to terrain height to keep origin on top of terrain
+    float ground = pivot.y;
+    if (heightSampler != null) {
+      float h = heightSampler.heightAt(pivot.x, pivot.z, pivot.y);
+      if (!Float.isNaN(h) && h != Float.NEGATIVE_INFINITY) ground = h;
+      pivot.y = ground;
+    }
+
     // Position the camera on the sphere, looking at pivot
     cam.position.set(pivot).sub(new Vector3(dir).scl(distance));
+    // Enforce minimum clearance by clamping camera Y, not by changing distance.
+    // This prevents "un-zooming" when the user looks up at close range.
+    float minClear = 2f;
+    float minY = ground + minClear;
+    if (cam.position.y < minY) cam.position.y = minY;
     cam.direction.set(dir);
     cam.up.set(Vector3.Y); // keep a stable up for editor
     cam.update(true);
+
+    // Publish the rotation axis/pivot to the editor context for other systems (e.g., marker)
+    EditorContext.setFocusPosition(pivot);
   }
 }
