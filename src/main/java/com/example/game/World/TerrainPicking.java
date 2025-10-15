@@ -22,6 +22,11 @@ public class TerrainPicking {
   private final Vector3 tmpA    = new Vector3();
   private final Vector3 tmpB    = new Vector3();
   private final Vector3 tmpP    = new Vector3();
+  private final Vector3 e1      = new Vector3();
+  private final Vector3 e2      = new Vector3();
+  private final Vector3 pvec    = new Vector3();
+  private final Vector3 tvec    = new Vector3();
+  private final Vector3 qvec    = new Vector3();
 
   TerrainPicking(TerrainWorld w) {
     this.w = w;
@@ -32,35 +37,79 @@ public class TerrainPicking {
    * @return true if a surface was hit (either actual terrain crossing, or plane fallback).
    */
   public Vector3 rayIntersectTerrain(Ray ray, HeightSampler s, float step, int refineIters) {
-    float lastT = 0f;
-    float lastDiff = Float.NaN; // ray.y - height
+    float tile = s.getTileSize();
+    if (!(tile > 0f)) tile = 1f;
+    float maxT = 4000f;
 
-    for (float t = step; t <= 4000f; t += step) {
-      tmpP.set(ray.origin).mulAdd(ray.direction, t);
-      float h = s.heightAt(tmpP.x, tmpP.z, Float.NaN);
-      if (Float.isNaN(h)) { lastDiff = Float.NaN; lastT = t; continue; }
-
-      float diff = tmpP.y - h;
-      if (!Float.isNaN(lastDiff) && Math.signum(lastDiff) != Math.signum(diff)) {
-        // Bracketed: binary search a few steps
-        float a = lastT, b = t;
-        for (int i = 0; i < refineIters; i++) {
-          float m = 0.5f * (a + b);
-          tmpA.set(ray.origin).mulAdd(ray.direction, m);
-          float hm = s.heightAt(tmpA.x, tmpA.z, Float.NaN);
-          float dm = tmpA.y - hm;
-          if (dm > 0f) a = m; else b = m;
-        }
-        float hitT = 0.5f * (a + b);
-        tmpB.set(ray.origin).mulAdd(ray.direction, hitT);
-        float hy = s.heightAt(tmpB.x, tmpB.z, tmpB.y);
-        tmpB.y = hy;
-        return new Vector3(tmpB); // return a copy for caller safety
-      }
-      lastDiff = diff;
-      lastT = t;
+    float dx = ray.direction.x;
+    float dz = ray.direction.z;
+    if (Math.abs(dx) < 1e-8f && Math.abs(dz) < 1e-8f) {
+      return rayIntersectTerrainFastPlane(ray, s);
     }
-    return null; // no intersection in range
+
+    int gx = (int)Math.floor(ray.origin.x / tile);
+    int gz = (int)Math.floor(ray.origin.z / tile);
+    int stepX = dx > 0f ? 1 : -1;
+    int stepZ = dz > 0f ? 1 : -1;
+
+    float nextGridX = (gx + (dx > 0f ? 1f : 0f)) * tile;
+    float nextGridZ = (gz + (dz > 0f ? 1f : 0f)) * tile;
+
+    float tMaxX = (Math.abs(dx) > 1e-8f) ? (nextGridX - ray.origin.x) / dx : Float.POSITIVE_INFINITY;
+    float tMaxZ = (Math.abs(dz) > 1e-8f) ? (nextGridZ - ray.origin.z) / dz : Float.POSITIVE_INFINITY;
+    if (tMaxX < 0f) tMaxX = 0f;
+    if (tMaxZ < 0f) tMaxZ = 0f;
+
+    float tDeltaX = (Math.abs(dx) > 1e-8f) ? (tile / Math.abs(dx)) : Float.POSITIVE_INFINITY;
+    float tDeltaZ = (Math.abs(dz) > 1e-8f) ? (tile / Math.abs(dz)) : Float.POSITIVE_INFINITY;
+
+    float tCurr = 0f;
+    int maxSteps = 4096;
+    for (int steps = 0; steps < maxSteps && tCurr <= maxT; steps++) {
+      float x0 = gx * tile;
+      float z0 = gz * tile;
+      float x1 = x0 + tile;
+      float z1 = z0 + tile;
+
+      float tEnter = tCurr;
+      float tExit = Math.min(tMaxX, tMaxZ);
+      if (tExit < tEnter) tExit = tEnter;
+
+      float h00 = s.heightAt(x0, z0, Float.NaN);
+      float h10 = s.heightAt(x1, z0, Float.NaN);
+      float h01 = s.heightAt(x0, z1, Float.NaN);
+      float h11 = s.heightAt(x1, z1, Float.NaN);
+
+      if (!(Float.isNaN(h00) || Float.isNaN(h10) || Float.isNaN(h01) || Float.isNaN(h11))) {
+        float tHit = Float.POSITIVE_INFINITY;
+
+        Vector3 v00 = tmpA.set(x0, h00, z0);
+        Vector3 v10 = tmpB.set(x1, h10, z0);
+        Vector3 v11 = tmpP.set(x1, h11, z1);
+        float th = rayTriangleT(ray, v00, v10, v11);
+        if (th >= tEnter - 1e-6f && th <= tExit + 1e-6f && th >= 0f) tHit = Math.min(tHit, th);
+
+        Vector3 v01 = e1.set(x0, h01, z1);
+        th = rayTriangleT(ray, v00, v11, v01);
+        if (th >= tEnter - 1e-6f && th <= tExit + 1e-6f && th >= 0f) tHit = Math.min(tHit, th);
+
+        if (tHit != Float.POSITIVE_INFINITY) {
+          Vector3 out = new Vector3(ray.origin).mulAdd(ray.direction, tHit);
+          return out;
+        }
+      }
+
+      if (tMaxX < tMaxZ) {
+        gx += stepX;
+        tCurr = tMaxX;
+        tMaxX += tDeltaX;
+      } else {
+        gz += stepZ;
+        tCurr = tMaxZ;
+        tMaxZ += tDeltaZ;
+      }
+    }
+    return null;
   }
 
   /**
@@ -77,5 +126,22 @@ public class TerrainPicking {
     }
     float h = s.heightAt(tmpA.x, tmpA.z, Float.NaN);
     return new Vector3(tmpA.x, h, tmpA.z);
+  }
+
+  private float rayTriangleT(Ray ray, Vector3 v0, Vector3 v1, Vector3 v2) {
+    e1.set(v1).sub(v0);
+    e2.set(v2).sub(v0);
+    pvec.set(ray.direction).crs(e2);
+    float det = e1.dot(pvec);
+    if (det > -1e-8f && det < 1e-8f) return Float.POSITIVE_INFINITY;
+    float invDet = 1f / det;
+    tvec.set(ray.origin).sub(v0);
+    float u = tvec.dot(pvec) * invDet;
+    if (u < 0f || u > 1f) return Float.POSITIVE_INFINITY;
+    qvec.set(tvec).crs(e1);
+    float v = ray.direction.dot(qvec) * invDet;
+    if (v < 0f || u + v > 1f) return Float.POSITIVE_INFINITY;
+    float t = e2.dot(qvec) * invDet;
+    return t;
   }
 }

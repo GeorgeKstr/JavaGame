@@ -2,51 +2,29 @@ package com.example.game.World.Editor.Tools.Splines;
 
 import com.badlogic.gdx.graphics.Camera;
 import com.badlogic.gdx.graphics.GL20;
-import com.badlogic.gdx.graphics.Texture;
-import com.badlogic.gdx.graphics.Mesh;
-import com.badlogic.gdx.graphics.VertexAttribute;
-import com.badlogic.gdx.graphics.VertexAttributes;
-import com.badlogic.gdx.graphics.glutils.ShaderProgram;
 import com.badlogic.gdx.graphics.glutils.ImmediateModeRenderer20;
 import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.scenes.scene2d.Actor;
 import com.badlogic.gdx.scenes.scene2d.ui.*;
 import com.badlogic.gdx.scenes.scene2d.utils.ChangeListener;
-import com.example.game.World.Editor.Tools.Tool;
 import com.example.game.World.Editor.Layers.SplinesLayer;
 import com.example.game.World.Splines.TerrainSpline;
-import com.example.game.World.Splines.TerrainSplineNode;
 import com.example.game.World.TerrainSystem;
 import com.badlogic.gdx.Gdx;
-import com.example.game.World.Editor.EditorContext;
-import com.example.game.World.MapResource;
-
-import java.util.HashMap;
-
-import java.util.List;
+import com.example.game.World.Editor.Render.NodeBoxRenderer;
+import com.example.game.World.Editor.Render.RenderMode;
 
 /** Tool for placing and editing RIVER splines. */
-public final class RiverTool implements Tool {
-  private final SplinesLayer layer;
-  private final TerrainSystem terrain;
-  private final ImmediateModeRenderer20 im = new ImmediateModeRenderer20(65536, false, true, 1);
-  private final ImmediateModeRenderer20 imSolid = new ImmediateModeRenderer20(65536, false, true, 0);
+public final class RiverTool extends BaseSplineTool {
   private final ImmediateModeRenderer20 imLines = new ImmediateModeRenderer20(16384, false, true, 0);
-  private final HashMap<Integer, Texture> texCache = new HashMap<>();
+  private final NodeBoxRenderer nodeRenderer;
 
-  private TerrainSpline active;
-  private boolean dragging = false;
-  // Water shader resources
-  private ShaderProgram waterShader;
-  private float timeAccum = 0f;
-  private Mesh ribbonMesh;
 
   // UI controls to allow syncing on selection changes within the tool
   private Slider widthSlider; private Label widthLabel;
   private Slider depthSlider; private Label depthLabel;
   private Slider steepSlider; private Label steepLabel;
   private Slider ribbonRatioSlider; private Label ribbonRatioLabel;
-  private TerrainSpline lastBoundForUI;
   // Newly tracked so values update when selection changes
   private Slider alphaSliderRef; private Label alphaLabelRef;
   private Slider hOffSliderRef; private Label hOffLabelRef;
@@ -54,81 +32,16 @@ public final class RiverTool implements Tool {
   private com.badlogic.gdx.scenes.scene2d.ui.List<String> nodeList;
 
   public RiverTool(SplinesLayer layer, TerrainSystem terrain) {
-    this.layer = layer; this.terrain = terrain;
+    super(layer, terrain);
+    this.nodeRenderer = new NodeBoxRenderer(layer, terrain);
     // Auto-resample ribbons whenever chunks load/unload so ribbons follow terrain without nudging
     this.terrain.onChunksChanged(() -> {
       java.util.List<TerrainSpline> list = this.layer.getSplines();
       for (TerrainSpline s : list) { s.markRibbonDirty(); s.rebuildRibbonAsync(this.terrain.getBaseHeightSampler(), 8); }
     });
-
-    // Compile water shader (no textures). Simple procedural flow and edge foam.
-    ShaderProgram.pedantic = false;
-    String vert =
-      "attribute vec3 a_position;\n"+
-      "attribute vec4 a_color;\n"+
-      "attribute vec2 a_texCoord0;\n"+
-      "uniform mat4 u_projTrans;\n"+
-      "varying vec4 v_color;\n"+
-      "varying vec2 v_uv;\n"+
-      "void main(){\n"+
-      "  v_color = a_color;\n"+
-      "  v_uv = a_texCoord0;\n"+
-      "  gl_Position = u_projTrans * vec4(a_position,1.0);\n"+
-      "}";
-    String frag =
-      "#ifdef GL_ES\nprecision mediump float;\n#endif\n"+
-      "varying vec4 v_color;\n"+
-      "varying vec2 v_uv;\n"+
-      "uniform float u_time;\n"+
-      "// v_uv.x: 0..1 across width (0 left, 1 right)\n"+
-      "// v_uv.y: along length (meters/width normalized)\n"+
-      "void main(){\n"+
-      "  float u = clamp(v_uv.x, 0.0, 1.0);\n"+
-      "  float v = v_uv.y + u_time * 0.15; // flow speed\n"+
-      "  // base water tint (will be multiplied by v_color)\n"+
-      "  vec3 base = vec3(0.08, 0.50, 1.00);\n"+
-      "  // subtle flow pattern\n"+
-      "  float wave1 = sin(v*10.0 + u*6.2831);\n"+
-      "  float wave2 = sin(v*21.0 + (1.0-u)*3.1416);\n"+
-      "  float flow = 0.5 + 0.5*wave1*0.6 + 0.5*wave2*0.4;\n"+
-      "  // foam near edges\n"+
-      "  float edge = min(u, 1.0-u);\n"+
-      "  float foam = smoothstep(0.2, 0.0, edge);\n"+
-      "  foam *= 0.6 + 0.4*sin(v*30.0);\n"+
-      "  vec3 color = base * mix(0.6, 1.1, flow);\n"+
-      "  color = mix(color, vec3(1.0), clamp(foam, 0.0, 1.0));\n"+
-      "  float alpha = v_color.a;\n"+
-      "  gl_FragColor = vec4(color * v_color.rgb, alpha);\n"+
-      "}";
-    waterShader = new ShaderProgram(vert, frag);
-    if (!waterShader.isCompiled()) {
-      com.badlogic.gdx.Gdx.app.error("RiverTool", "Water shader compile error: "+waterShader.getLog());
-    }
-    // Prepare a reusable mesh (dynamic)
-    ribbonMesh = new Mesh(true, 15000, 0,
-      new VertexAttribute(VertexAttributes.Usage.Position, 3, "a_position"),
-      new VertexAttribute(VertexAttributes.Usage.ColorUnpacked, 4, "a_color"),
-      new VertexAttribute(VertexAttributes.Usage.TextureCoordinates, 2, "a_texCoord0")
-    );
   }
 
-  // ----- helpers -----
-  private static float projParamOnSegXZ(Vector3 a, Vector3 b, float px, float pz) {
-    float vx = b.x - a.x, vz = b.z - a.z;
-    float wx = px - a.x, wz = pz - a.z;
-    float denom = vx*vx + vz*vz;
-    if (denom <= 1e-6f) return 0f;
-    return (vx*wx + vz*wz) / denom; // un-clamped t
-  }
-
-  private static float dist2ToSegXZ(Vector3 a, Vector3 b, float px, float pz) {
-    float t = projParamOnSegXZ(a, b, px, pz);
-    if (t < 0f) t = 0f; else if (t > 1f) t = 1f;
-    float sx = a.x + (b.x - a.x) * t;
-    float sz = a.z + (b.z - a.z) * t;
-    float dx = px - sx, dz = pz - sz;
-    return dx*dx + dz*dz;
-  }
+  // helper methods moved to BaseSplineTool
 
   @Override public String name() { return "River"; }
 
@@ -231,8 +144,8 @@ public final class RiverTool implements Tool {
     }});
     ScrollPane sp = new ScrollPane(nodeList, skin);
     sp.setFadeScrollBars(false);
-    lt.add(sp).width(260).height(120).row();
-    TextButton del = new TextButton("Delete Selected Node", skin);
+    lt.add(sp).width(180).height(120).row();
+    TextButton del = new TextButton("Delete Node", skin);
     del.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
       TerrainSpline cur = layer.getSelectedSpline();
       if (cur == null || cur.getType()!=TerrainSpline.Type.RIVER) return;
@@ -245,125 +158,38 @@ public final class RiverTool implements Tool {
       layer.select(cur, newSel);
       if (nodeList != null) { nodeList.setItems(buildNodeLabels(cur)); if (newSel >= 0) nodeList.setSelectedIndex(newSel); }
       cur.markRibbonDirty(); cur.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 2);
+      terrain.reloadAllChunks();
     }});
     lt.add(del).left().padTop(6);
+    TextButton delSpline = new TextButton("Delete Spline", skin);
+    delSpline.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+      TerrainSpline cur = layer.getSelectedSpline();
+      if (cur == null || cur.getType()!=TerrainSpline.Type.RIVER) return;
+      layer.removeSpline(cur);
+      layer.clearSelection();
+      if (nodeList != null) nodeList.clearItems();
+      layer.saveSplinesToMap();
+      terrain.reloadAllChunks();
+    }});
+    lt.add(delSpline).left().padTop(6).padLeft(6);
     container.add(lt).left().row();
 
     // (Bake button removed; baking is live. Use global Refresh in HUD if needed.)
   }
 
-  @Override public void onSelected() { active = null; dragging = false; layer.clearSelection(); com.example.game.World.Editor.EditorContext.setSelectedPlaceable(null); }
+  @Override public void onSelected() { super.onSelected(); }
 
   @Override public void onPointerDown(Vector3 world, int button, boolean shift, boolean ctrl) {
-    if (button == com.badlogic.gdx.Input.Buttons.LEFT) {
-      if (ctrl) {
-        TerrainSpline spline = layer.getSelectedSpline();
-        float baseY = terrain.getBaseHeightSampler().heightAt(world.x, world.z, world.y);
-        float y = baseY + 0.05f;
-        if (spline == null || spline.getType() != TerrainSpline.Type.RIVER || layer.getSelectedNode() < 0) {
-          // No valid selection: create or append to a new spline
-          if (spline == null) spline = layer.createSpline(TerrainSpline.Type.RIVER);
-          spline.addNode(new TerrainSplineNode(world.x, y, world.z));
-          layer.select(spline, spline.size()-1);
-          com.example.game.World.Editor.EditorContext.setSelectedPlaceable(spline);
-          spline.markRibbonDirty();
-          spline.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 2);
-          if (nodeList != null) nodeList.setItems(buildNodeLabels(spline)); nodeList.setSelectedIndex(spline.size()-1);
-          if (widthSlider != null) { widthSlider.setValue(spline.width); widthLabel.setText(String.format("Width: %.1f m", spline.width)); }
-          if (depthSlider != null) { depthSlider.setValue(spline.riverDepth); depthLabel.setText(String.format("Depth: %.1f m", spline.riverDepth)); }
-          if (steepSlider != null) { steepSlider.setValue(spline.bankFalloff); steepLabel.setText(String.format("Steepness: %.2f", spline.bankFalloff)); }
-          return;
-        }
-
-        int n = spline.size();
-        int iSel = layer.getSelectedNode();
-        List<TerrainSplineNode> nodes = spline.getNodes();
-        int insertAt;
-
-        if (n == 1) {
-          // Single node: make this the new second node
-          insertAt = 1;
-        } else if (iSel == 0) {
-          // First node: decide between split [0,1] or prepend
-          Vector3 a = nodes.get(0).pos, b = nodes.get(1).pos;
-          float tRaw = projParamOnSegXZ(a, b, world.x, world.z);
-          if (tRaw < 0f) insertAt = 0; // before first
-          else insertAt = 1;            // split between 0 and 1
-        } else if (iSel == n - 1) {
-          // Last node: decide between append or split [n-2,n-1]
-          Vector3 a = nodes.get(n-2).pos, b = nodes.get(n-1).pos;
-          float tRaw = projParamOnSegXZ(a, b, world.x, world.z);
-          if (tRaw > 1f) insertAt = n; // after last
-          else insertAt = n - 1;       // split between n-2 and n-1 (insert before last)
-        } else {
-          // Middle node: choose nearer adjacent segment
-          Vector3 a0 = nodes.get(iSel-1).pos, b0 = nodes.get(iSel).pos;
-          Vector3 a1 = nodes.get(iSel).pos, b1 = nodes.get(iSel+1).pos;
-          float d0 = dist2ToSegXZ(a0, b0, world.x, world.z);
-          float d1 = dist2ToSegXZ(a1, b1, world.x, world.z);
-          insertAt = (d0 <= d1) ? iSel : iSel + 1;
-        }
-
-        // Clamp and insert
-        insertAt = Math.max(0, Math.min(insertAt, spline.size()));
-        spline.insertNode(insertAt, new TerrainSplineNode(world.x, y, world.z));
-        layer.select(spline, insertAt);
-        com.example.game.World.Editor.EditorContext.setSelectedPlaceable(spline);
-        spline.markRibbonDirty();
-        spline.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 2);
-        if (nodeList != null) nodeList.setItems(buildNodeLabels(spline)); nodeList.setSelectedIndex(insertAt);
-        if (widthSlider != null) { widthSlider.setValue(spline.width); widthLabel.setText(String.format("Width: %.1f m", spline.width)); }
-        if (depthSlider != null) { depthSlider.setValue(spline.riverDepth); depthLabel.setText(String.format("Depth: %.1f m", spline.riverDepth)); }
-        if (steepSlider != null) { steepSlider.setValue(spline.bankFalloff); steepLabel.setText(String.format("Steepness: %.2f", spline.bankFalloff)); }
-        if (alphaSliderRef != null) { alphaSliderRef.setValue(spline.transparency); }
-        if (alphaLabelRef != null) { alphaLabelRef.setText(String.format("Transparency: %.2f", spline.transparency)); }
-        if (hOffSliderRef != null) { hOffSliderRef.setValue(spline.heightOffset); }
-        if (hOffLabelRef != null) { hOffLabelRef.setText(String.format("Height Offset: %.2f m", spline.heightOffset)); }
-        if (ribbonRatioSlider != null) { ribbonRatioSlider.setValue(spline.ribbonWidthRatio); }
-        if (ribbonRatioLabel != null) { ribbonRatioLabel.setText(String.format("Ribbon overflow: %.2f", spline.ribbonWidthRatio)); }
-        if (reverseFlowCBRef != null) reverseFlowCBRef.setChecked(spline.reverseFlow);
-        return;
-      }
-      // Ray-vs-AABB picking (ignores terrain); uses current mouse screen coords
-      int sx = Gdx.input.getX();
-      int sy = Gdx.input.getY();
-      var pick = layer.pickNodeRayAABB(EditorContext.getCamera(), sx, sy, 1.0f, 0.4f, 0.8f);
-      if (pick != null) {
-        layer.select(pick.spline, pick.nodeIndex); dragging = true;
-        com.example.game.World.Editor.EditorContext.setSelectedPlaceable(pick.spline);
-        // Sync sliders to picked spline
-        TerrainSpline ssel = layer.getSelectedSpline();
-        if (ssel != null && ssel.getType() == TerrainSpline.Type.RIVER) {
-          if (nodeList != null) { nodeList.setItems(buildNodeLabels(ssel)); nodeList.setSelectedIndex(pick.nodeIndex); }
-          if (widthSlider != null) { widthSlider.setValue(ssel.width); widthLabel.setText(String.format("Width: %.1f m", ssel.width)); }
-          if (depthSlider != null) { depthSlider.setValue(ssel.riverDepth); depthLabel.setText(String.format("Depth: %.1f m", ssel.riverDepth)); }
-          if (steepSlider != null) { steepSlider.setValue(ssel.bankFalloff); steepLabel.setText(String.format("Steepness: %.2f", ssel.bankFalloff)); }
-          if (alphaSliderRef != null) { alphaSliderRef.setValue(ssel.transparency); }
-          if (alphaLabelRef != null) { alphaLabelRef.setText(String.format("Transparency: %.2f", ssel.transparency)); }
-          if (hOffSliderRef != null) { hOffSliderRef.setValue(ssel.heightOffset); }
-          if (hOffLabelRef != null) { hOffLabelRef.setText(String.format("Height Offset: %.2f m", ssel.heightOffset)); }
-          if (ribbonRatioSlider != null) { ribbonRatioSlider.setValue(ssel.ribbonWidthRatio); }
-          if (ribbonRatioLabel != null) { ribbonRatioLabel.setText(String.format("Ribbon overflow: %.2f", ssel.ribbonWidthRatio)); }
-          if (reverseFlowCBRef != null) reverseFlowCBRef.setChecked(ssel.reverseFlow);
-        }
-      }
-      else { 
-        layer.clearSelection(); com.example.game.World.Editor.EditorContext.setSelectedPlaceable(null);
-        dragging = false; 
-        if (nodeList != null) nodeList.clearItems();
-      }
-    } else if (button == com.badlogic.gdx.Input.Buttons.RIGHT) {
-      active = null; dragging = false;
-    }
+    // Delegate pointer behavior to BaseSplineTool
+    super.onPointerDown(world, button, shift, ctrl);
   }
 
   @Override public void onPointerDrag(Vector3 world, int button, boolean shift, boolean ctrl) {
-    // Do nothing here; dragging is handled in update() for performance
-    return;
+    // Dragging handled by BaseSplineTool.update
+    super.onPointerDrag(world, button, shift, ctrl);
   }
 
   @Override public void update(float dt, Camera cam) {
-    timeAccum += dt;
     // Keep UI sliders in sync with current selection every frame
     TerrainSpline cur = layer.getSelectedSpline();
     if (cur != null && cur.getType() == TerrainSpline.Type.RIVER) {
@@ -384,34 +210,42 @@ public final class RiverTool implements Tool {
         reverseFlowCBRef.setChecked(cur.reverseFlow);
       }
     }
-
-    if (!dragging) return;
-    TerrainSpline sel = layer.getSelectedSpline();
-    int idx = layer.getSelectedNode();
-    if (sel == null || idx < 0 || cam == null) return;
-    int sx = Gdx.input.getX();
-    int sy = Gdx.input.getY();
-    com.badlogic.gdx.math.collision.Ray ray = cam.getPickRay(sx, sy);
-    // Use shared TerrainPicking API (same as terrain tools)
-    var picker = terrain.getPicker();
-    Vector3 hit = picker.rayIntersectTerrain(ray, terrain.getBaseHeightSampler(), 2.5f, 6);
-    if (hit == null) hit = picker.rayIntersectTerrainFastPlane(ray, terrain.getBaseHeightSampler());
-    sel.setNodePos(idx, new Vector3(hit.x, hit.y + 0.05f, hit.z));
-    // Throttled by TerrainSpline.rebuildRibbonAsync internal timer
-    sel.markRibbonDirty();
-    sel.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 2);
-    if (nodeList != null) { nodeList.setItems(buildNodeLabels(sel)); nodeList.setSelectedIndex(idx); }
+    // Delegate dragging behavior to BaseSplineTool
+    super.update(dt, cam);
   }
 
   @Override public void onPointerUp(Vector3 world, int button, boolean shift, boolean ctrl) {
-    if (dragging) {
-      TerrainSpline sel = layer.getSelectedSpline();
-      if (sel != null && sel.getType() == TerrainSpline.Type.RIVER) {
-        sel.markRibbonDirty();
-        sel.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 2);
-      }
+    super.onPointerUp(world, button, shift, ctrl);
+  }
+
+  // ----- Base hooks -----
+  @Override protected TerrainSpline.Type handledType() { return TerrainSpline.Type.RIVER; }
+  @Override protected float pickHalfXZ() { return 3.0f; }
+  @Override protected float pickHalfYBelow() { return 2.5f; }
+  @Override protected float pickHalfYAbove() { return 0.5f; }
+  @Override protected float dragRayStep() { return 0.25f; }
+  @Override protected int dragRaySteps() { return 6; }
+
+  @Override
+  protected void onSelectionChangedUI(TerrainSpline ssel, int nodeIndex) {
+    if (ssel != null && ssel.getType() == TerrainSpline.Type.RIVER) {
+      if (nodeList != null) { nodeList.setItems(buildNodeLabels(ssel)); nodeList.setSelectedIndex(nodeIndex); }
+      if (widthSlider != null) { widthSlider.setValue(ssel.width); widthLabel.setText(String.format("Width: %.1f m", ssel.width)); }
+      if (depthSlider != null) { depthSlider.setValue(ssel.riverDepth); depthLabel.setText(String.format("Depth: %.1f m", ssel.riverDepth)); }
+      if (steepSlider != null) { steepSlider.setValue(ssel.bankFalloff); steepLabel.setText(String.format("Steepness: %.2f", ssel.bankFalloff)); }
+      if (alphaSliderRef != null) { alphaSliderRef.setValue(ssel.transparency); }
+      if (alphaLabelRef != null) { alphaLabelRef.setText(String.format("Transparency: %.2f", ssel.transparency)); }
+      if (hOffSliderRef != null) { hOffSliderRef.setValue(ssel.heightOffset); }
+      if (hOffLabelRef != null) { hOffLabelRef.setText(String.format("Height Offset: %.2f m", ssel.heightOffset)); }
+      if (ribbonRatioSlider != null) { ribbonRatioSlider.setValue(ssel.ribbonWidthRatio); }
+      if (ribbonRatioLabel != null) { ribbonRatioLabel.setText(String.format("Ribbon overflow: %.2f", ssel.ribbonWidthRatio)); }
+      if (reverseFlowCBRef != null) reverseFlowCBRef.setChecked(ssel.reverseFlow);
     }
-    dragging = false;
+  }
+
+  @Override
+  protected void onSelectionClearedUI() {
+    if (nodeList != null) nodeList.clearItems();
   }
 
   @Override public void render3D(Camera cam) {
@@ -422,9 +256,7 @@ public final class RiverTool implements Tool {
       if (s.getType() != TerrainSpline.Type.RIVER) continue;
       if (!s.hasRibbon()) continue;
       boolean sel = (s == layer.getSelectedSpline());
-      float aa = Math.max(0f, Math.min(1f, s.transparency));
-      float[] sunTint = computeSunTint();
-      float rr = sunTint[0]; float gg = sunTint[1]; float bb = sunTint[2];
+      // ribbons are drawn by SplinesLayer; only overlays here
       boolean atop = false;
       if (atop) { Gdx.gl.glDisable(GL20.GL_DEPTH_TEST); Gdx.gl.glDepthMask(false); }
       Gdx.gl.glDisable(GL20.GL_CULL_FACE);
@@ -432,59 +264,6 @@ public final class RiverTool implements Tool {
       float[] lx = s.getLX(), ly = s.getLY(), lz = s.getLZ();
       float[] rx = s.getRX(), ry = s.getRY(), rz = s.getRZ();
       int n = s.getTriPairs() + 1;
-      float yLift = s.heightOffset + 0.02f;
-      float ratio = Math.max(0.01f, s.ribbonWidthRatio);
-
-      // Draw in batches of segments using custom shader
-      int i = 0;
-      final int maxSegmentsPerBatch = 2500; // 2500 * 6 = 15000 verts
-      float cumV = 0f; // cumulative V length across batches
-      while (i < n - 1) {
-        int end = Math.min(n - 1, i + maxSegmentsPerBatch);
-        float vLen = 0f; // accumulate along centerline (V axis) for this batch
-        // Build vertices for batch into a float array: (x,y,z,r,g,b,a,u,v)
-        int segs = end - i;
-        int vertsCount = segs * 6; // 2 triangles per segment
-        int stride = 9;
-        float[] verts = new float[vertsCount * stride];
-        int idx = 0;
-        for (int k = i; k < end; k++) {
-          float clx0 = 0.5f * (lx[k] + rx[k]);
-          float clz0 = 0.5f * (lz[k] + rz[k]);
-          float clx1 = 0.5f * (lx[k+1] + rx[k+1]);
-          float clz1 = 0.5f * (lz[k+1] + rz[k+1]);
-          float ax = clx0, az = clz0;
-          float bx = clx1, bz = clz1;
-          float du = (float)Math.sqrt((bx-ax)*(bx-ax) + (bz-az)*(bz-az));
-          float v2 = vLen + du / Math.max(0.1f, s.width);
-          float nlx0 = ax + (lx[k]   - ax) * ratio; float nlz0 = az + (lz[k]   - az) * ratio;
-          float nrx0 = ax + (rx[k]   - ax) * ratio; float nrz0 = az + (rz[k]   - az) * ratio;
-          float nlx1 = bx + (lx[k+1] - bx) * ratio; float nlz1 = bz + (lz[k+1] - bz) * ratio;
-          float nrx1 = bx + (rx[k+1] - bx) * ratio; float nrz1 = bz + (rz[k+1] - bz) * ratio;
-          // tri 1: (left0, right0, left1)
-          idx = putVert(verts, idx, nlx0, ly[k]   +yLift, nlz0, rr,gg,bb,aa, 0f, cumV + vLen);
-          idx = putVert(verts, idx, nrx0, ry[k]   +yLift, nrz0, rr,gg,bb,aa, 1f, cumV + vLen);
-          idx = putVert(verts, idx, nlx1, ly[k+1] +yLift, nlz1, rr,gg,bb,aa, 0f, cumV + v2);
-          // tri 2: (right0, right1, left1)
-          idx = putVert(verts, idx, nrx0, ry[k]   +yLift, nrz0, rr,gg,bb,aa, 1f, cumV + vLen);
-          idx = putVert(verts, idx, nrx1, ry[k+1] +yLift, nrz1, rr,gg,bb,aa, 1f, cumV + v2);
-          idx = putVert(verts, idx, nlx1, ly[k+1] +yLift, nlz1, rr,gg,bb,aa, 0f, cumV + v2);
-          vLen = v2;
-        }
-        // Draw with water shader
-        if (waterShader != null && waterShader.isCompiled()) {
-          ribbonMesh.setVertices(verts, 0, verts.length);
-          waterShader.bind();
-          waterShader.setUniformMatrix("u_projTrans", cam.combined);
-          waterShader.setUniformf("u_time", timeAccum);
-          ribbonMesh.render(waterShader, GL20.GL_TRIANGLES);
-        }
-        i = end;
-        cumV += vLen;
-      }
-
-      // No extra polygons: ratio only scales left/right vertices; caps removed per request
-
       // Ensure overlays (centerline and node boxes) draw with solid color (no texturing)
       Gdx.gl.glBindTexture(GL20.GL_TEXTURE_2D, 0);
 
@@ -509,61 +288,14 @@ public final class RiverTool implements Tool {
       }
       imLines.end();
 
-      // node hitboxes (3D wire boxes centered at current baseline height at node XZ); batch drawing
-      List<com.example.game.World.Splines.TerrainSplineNode> nodes = s.getNodes();
-      imLines.begin(cam.combined, GL20.GL_LINES);
-      for (int k=0;k<nodes.size();k++){
-        Vector3 p = nodes.get(k).pos;
-        // Sample baseline at node XZ so boxes track terrain baseline after baking/reloads
-        float baseY = terrain.getBaseHeightSampler().heightAt(p.x, p.z, p.y);
-        float halfX = 1.0f, halfZ = 1.0f;
-        float halfYAbove = 0.6f, halfYBelow = 0.2f; // extend more above baseline
-        float y0 = baseY - halfYBelow;
-        float y1 = baseY + halfYAbove;
-        float x0 = p.x - halfX, x1 = p.x + halfX;
-        float z0 = p.z - halfZ, z1 = p.z + halfZ;
-
-        // Colors: light blue when selected spline, darker blue when not; selected node = red
-        int selIdx = layer.getSelectedNode();
-        float cr, cg, cb, ca;
-        if (sel && k == selIdx) {
-          cr = 1.0f; cg = 0.25f; cb = 0.25f; ca = 1.0f; // selected node: red
-        } else if (sel) {
-          cr = 0.20f; cg = 0.60f; cb = 1.00f; ca = 1.0f; // selected spline: lighter blue
-        } else {
-          cr = 0.08f; cg = 0.35f; cb = 0.60f; ca = 0.9f; // non-selected spline: darker blue
-        }
-        // bottom rectangle
-        imLines.color(cr,cg,cb,ca); imLines.vertex(x0, y0, z0); imLines.color(cr,cg,cb,ca); imLines.vertex(x1, y0, z0);
-        imLines.color(cr,cg,cb,ca); imLines.vertex(x1, y0, z0); imLines.color(cr,cg,cb,ca); imLines.vertex(x1, y0, z1);
-        imLines.color(cr,cg,cb,ca); imLines.vertex(x1, y0, z1); imLines.color(cr,cg,cb,ca); imLines.vertex(x0, y0, z1);
-        imLines.color(cr,cg,cb,ca); imLines.vertex(x0, y0, z1); imLines.color(cr,cg,cb,ca); imLines.vertex(x0, y0, z0);
-        // top rectangle
-        imLines.color(cr,cg,cb,ca); imLines.vertex(x0, y1, z0); imLines.color(cr,cg,cb,ca); imLines.vertex(x1, y1, z0);
-        imLines.color(cr,cg,cb,ca); imLines.vertex(x1, y1, z0); imLines.color(cr,cg,cb,ca); imLines.vertex(x1, y1, z1);
-        imLines.color(cr,cg,cb,ca); imLines.vertex(x1, y1, z1); imLines.color(cr,cg,cb,ca); imLines.vertex(x0, y1, z1);
-        imLines.color(cr,cg,cb,ca); imLines.vertex(x0, y1, z1); imLines.color(cr,cg,cb,ca); imLines.vertex(x0, y1, z0);
-        // vertical edges
-        imLines.color(cr,cg,cb,ca); imLines.vertex(x0, y0, z0); imLines.color(cr,cg,cb,ca); imLines.vertex(x0, y1, z0);
-        imLines.color(cr,cg,cb,ca); imLines.vertex(x1, y0, z0); imLines.color(cr,cg,cb,ca); imLines.vertex(x1, y1, z0);
-        imLines.color(cr,cg,cb,ca); imLines.vertex(x1, y0, z1); imLines.color(cr,cg,cb,ca); imLines.vertex(x1, y1, z1);
-        imLines.color(cr,cg,cb,ca); imLines.vertex(x0, y0, z1); imLines.color(cr,cg,cb,ca); imLines.vertex(x0, y1, z1);
-      }
-      imLines.end();
-
       // Restore state so subsequent splines render with depth/cull
       Gdx.gl.glLineWidth(1f);
       Gdx.gl.glEnable(GL20.GL_CULL_FACE);
       Gdx.gl.glEnable(GL20.GL_DEPTH_TEST);
     }
+    // Render node AABBs once per frame for rivers
+    nodeRenderer.render(cam, RenderMode.TOOL_RIVER);
     Gdx.gl.glDisable(GL20.GL_BLEND);
-  }
-
-  private static int putVert(float[] arr, int idx, float x, float y, float z, float r, float g, float b, float a, float u, float v) {
-    arr[idx++] = x; arr[idx++] = y; arr[idx++] = z;
-    arr[idx++] = r; arr[idx++] = g; arr[idx++] = b; arr[idx++] = a;
-    arr[idx++] = u; arr[idx++] = v;
-    return idx;
   }
 
   private com.badlogic.gdx.utils.Array<String> buildNodeLabels(TerrainSpline s) {
@@ -574,64 +306,5 @@ public final class RiverTool implements Tool {
       arr.add(String.format("%02d: (%.1f, %.1f, %.1f)", i, n.pos.x, n.pos.y, n.pos.z));
     }
     return arr;
-  }
-
-  private String currentTextureLabel(TerrainSpline s) {
-    if (s == null) return "-";
-    String[] names = layer.listSplineTextureNames();
-    int id = s.textureId;
-    if (id >= 0 && id < names.length) return names[id];
-    return "-";
-  }
-
-  private Texture getSplineTexture(int id) {
-    if (id < 0) return null;
-    Texture cached = texCache.get(id);
-    if (cached != null) return cached;
-    // Resolve texture path by MapResource manifest id (shared list)
-    MapResource map = terrain.getMap();
-    var list = map.getManifest().groundTextures;
-    if (id >= list.size()) return null;
-    String path = list.get(id).file;
-    byte[] bytes = map.getTextureBytes(path);
-    if (bytes == null || bytes.length == 0) return null;
-    Texture t = new Texture(new com.badlogic.gdx.graphics.Pixmap(bytes, 0, bytes.length));
-    t.setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
-    t.setWrap(Texture.TextureWrap.Repeat, Texture.TextureWrap.Repeat);
-    texCache.put(id, t);
-    return t;
-  }
-
-  // Compute a simple day/night tint similar in spirit to terrain lighting.
-  // Uses time-of-day CVAR to compute a sun direction and derives an intensity from elevation.
-  private float[] computeSunTint() {
-    // Time of day 0..24
-    float hour = com.example.game.Config.cvar.CVars.RENDER_TIME_OF_DAY.get();
-    float t = (hour % 24f) / 24f;
-    float az = (float)(t * Math.PI * 2.0); // 0..2π
-    // Equinox-like elevation curve (peak at noon)
-    float maxElevDeg = 75f;
-    float maxElevRad = (float)(Math.toRadians(maxElevDeg));
-    float elev = (float)(maxElevRad * Math.sin(az - Math.PI * 0.5));
-    float sinE = (float)Math.sin(elev);
-    float cosE = (float)Math.cos(elev);
-    // World orientation consistent with EditorScreen
-    float sunY = sinE; // elevation drives brightness
-
-    // Intensity from elevation; keep some ambient so nights aren't black
-    float intensity = Math.max(0f, sunY);
-    intensity = 0.2f + 0.8f * intensity; // 0.2 at night .. 1.0 at noon
-
-    // Warm/cool balance from CVAR
-    float warmth = com.example.game.Config.cvar.CVars.RENDER_SKY_WARMTH.get(); // 0..1
-    float coolR=0.60f, coolG=0.70f, coolB=0.80f;
-    float warmR=0.95f, warmG=0.88f, warmB=0.72f;
-    float r = coolR + (warmR - coolR) * warmth;
-    float g = coolG + (warmG - coolG) * warmth;
-    float b = coolB + (warmB - coolB) * warmth;
-
-    // Apply intensity
-    r *= intensity; g *= intensity; b *= intensity;
-    return new float[]{ r, g, b };
   }
 }

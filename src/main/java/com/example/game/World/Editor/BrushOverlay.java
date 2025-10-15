@@ -49,10 +49,8 @@ public final class BrushOverlay {
 
     // Intersect against the terrain heightfield using the shared picker (hill-aware),
     // fallback to fast plane if no intersection is found within range.
-    Vector3 hit = terrain.getPicker().rayIntersectTerrain(ray, terrain.getBaseHeightSampler(), 2.5f, 6);
-    if (hit == null) hit = terrain.getPicker().rayIntersectTerrainFastPlane(ray, terrain.getBaseHeightSampler());
-    hasHit = (hit != null);
-    if (!hasHit) return;
+    Vector3 hit = terrain.getPicker().rayIntersectTerrainFastPlane(ray, sampler);
+    if (hit == null) return;
 
     center.set(hit.x, hit.y + 0.02f, hit.z);
     radiusWorld = Math.max(1, brushRadiusTiles) * tileSize;
