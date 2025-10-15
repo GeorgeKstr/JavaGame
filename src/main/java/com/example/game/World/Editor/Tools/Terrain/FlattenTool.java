@@ -1,7 +1,9 @@
 package com.example.game.World.Editor.Tools.Terrain;
 
+import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.graphics.Camera;
 import com.badlogic.gdx.math.Vector3;
+import com.badlogic.gdx.math.collision.Ray;
 import com.badlogic.gdx.scenes.scene2d.ui.*;
 import com.example.game.World.TerrainSystem;
 import com.example.game.World.Editor.Tools.AbstractBrushTool;
@@ -17,7 +19,7 @@ public final class FlattenTool extends AbstractBrushTool {
   // Throttle so we don't restamp too densely while dragging
   private static final float MIN_STAMP_DT_SEC    = 1f / 120f; // time gate
   private static final float MIN_STAMP_DIST_FRAC = 0.20f;     // distance gate (fraction of radius)
-
+  
   private boolean pointerActive = false;
 
   private final Vector3 lastStampWorld = new Vector3();
@@ -35,7 +37,7 @@ public final class FlattenTool extends AbstractBrushTool {
   }
 
   @Override
-  public void onPointerDown(Vector3 world, int button, boolean shift, boolean ctrl) {
+  public void onPointerDown(int button, boolean shift, boolean ctrl) {
     pointerActive = true;
     lastStampWorld.set(world);
     stampAt(world);
@@ -43,7 +45,7 @@ public final class FlattenTool extends AbstractBrushTool {
   }
 
   @Override
-  public void onPointerDrag(Vector3 world, int button, boolean shift, boolean ctrl) {
+  public void onPointerDrag(int button, boolean shift, boolean ctrl) {
     // Distance gate: only restamp after moving enough relative to brush size
     float tile = terrain.getTileSize();
     int rCells = Math.max(1, (int)brush.getRadius());
@@ -62,7 +64,7 @@ public final class FlattenTool extends AbstractBrushTool {
   }
 
   @Override
-  public void onPointerUp(Vector3 world, int button, boolean shift, boolean ctrl) {
+  public void onPointerUp(int button, boolean shift, boolean ctrl) {
     pointerActive = false;
   }
 
@@ -83,4 +85,5 @@ public final class FlattenTool extends AbstractBrushTool {
       terrain.rebuildDirtyChunks();
     }
   }
+
 }

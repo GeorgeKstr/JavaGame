@@ -14,7 +14,7 @@ public final class WalkTool implements Tool {
     parent.add(new Label("LMB: add walk node\nCtrl+LMB: remove\nRMB drag/WASD: move", skin)).left().row();
   }
 
-  @Override public void onPointerDown(Vector3 world, int button, boolean shift, boolean ctrl) {
+  @Override public void onPointerDown(int button, boolean shift, boolean ctrl) {
     //if (!ctrl) terrain.walk().addNode(world.x, world.z); else terrain.walk().removeNearest(world.x, world.z);
   }
 }

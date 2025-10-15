@@ -46,7 +46,7 @@ public final class PolishTool extends AbstractBrushTool {
   }
 
   @Override
-  public void onPointerDown(Vector3 world, int button, boolean shift, boolean ctrl) {
+  public void onPointerDown(int button, boolean shift, boolean ctrl) {
     pointerActive = true;
     targetWorld.set(world);
     smoothWorld.set(world);
@@ -56,12 +56,12 @@ public final class PolishTool extends AbstractBrushTool {
   }
 
   @Override
-  public void onPointerDrag(Vector3 world, int button, boolean shift, boolean ctrl) {
+  public void onPointerDrag(int button, boolean shift, boolean ctrl) {
     targetWorld.set(world);
   }
 
   @Override
-  public void onPointerUp(Vector3 world, int button, boolean shift, boolean ctrl) {
+  public void onPointerUp(int button, boolean shift, boolean ctrl) {
     pointerActive = false;
   }
 

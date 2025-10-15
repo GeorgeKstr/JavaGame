@@ -3,7 +3,9 @@ package com.example.game.World.Editor;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.graphics.Camera;
+import com.badlogic.gdx.graphics.PerspectiveCamera;
 import com.badlogic.gdx.math.Vector3;
+import com.badlogic.gdx.math.collision.Ray;
 import com.badlogic.gdx.scenes.scene2d.ui.*;
 import com.example.game.World.Editor.Tools.Tool;
 
@@ -80,14 +82,14 @@ public abstract class BaseToolLayer implements EditorLayer {
   }
 
   // ---------------- input / lifecycle passthrough ----------------
-  public void onPointerDown(Camera cam, Vector3 world, int button, boolean sh, boolean ctrl) {
-    if (active != null) active.onPointerDown(world, button, sh, ctrl);
+  public void onPointerDown(Camera cam, int button, boolean sh, boolean ctrl) {
+    if (active != null) active.onPointerDown(button, sh, ctrl);
   }
-  public void onPointerDrag(Camera cam, Vector3 world, int button, boolean sh, boolean ctrl) {
-    if (active != null) active.onPointerDrag(world, button, sh, ctrl);
+  public void onPointerDrag(Camera cam, int button, boolean sh, boolean ctrl) {
+    if (active != null) active.onPointerDrag(button, sh, ctrl);
   }
-  public void onPointerUp(Camera cam, Vector3 world, int button, boolean sh, boolean ctrl) {
-    if (active != null) active.onPointerUp(world, button, sh, ctrl);
+  public void onPointerUp(Camera cam, int button, boolean sh, boolean ctrl) {
+    if (active != null) active.onPointerUp(button, sh, ctrl);
   }
 
   public Tool getActiveTool() { return active; }

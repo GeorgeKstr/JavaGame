@@ -117,8 +117,8 @@ public final class PaintTextureTool extends AbstractBrushTool {
   }
 
   // painting
-  @Override public void onPointerDown(Vector3 world, int button, boolean shift, boolean ctrl) { paint(world); }
-  @Override public void onPointerDrag(Vector3 world, int button, boolean shift, boolean ctrl) { paint(world); }
+  @Override public void onPointerDown(int button, boolean shift, boolean ctrl) { paint(world); }
+  @Override public void onPointerDrag(int button, boolean shift, boolean ctrl) { paint(world); }
 
   private void paint(Vector3 world) {
     float tile = terrain.getTileSize();

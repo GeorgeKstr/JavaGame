@@ -19,10 +19,6 @@ public final class EditorBootstrap {
       @Override public void moveWASD(boolean w, boolean a, boolean s, boolean d, float dt) { 
         edCam.move(cam, s, d, w, a, dt/3f); 
       }
-      @Override public Vector3 pickOnTerrain(int sx, int sy) {
-        Ray ray = ((PerspectiveCamera) cam).getPickRay(sx, sy);
-        return terrain.getPicker().rayIntersectTerrainFastPlane(ray, terrain);
-      }
     });
   }
 }

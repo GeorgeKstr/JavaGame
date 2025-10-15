@@ -179,14 +179,14 @@ public final class RiverTool extends BaseSplineTool {
 
   @Override public void onSelected() { super.onSelected(); }
 
-  @Override public void onPointerDown(Vector3 world, int button, boolean shift, boolean ctrl) {
+  @Override public void onPointerDown(int button, boolean shift, boolean ctrl) {
     // Delegate pointer behavior to BaseSplineTool
-    super.onPointerDown(world, button, shift, ctrl);
+    super.onPointerDown(button, shift, ctrl);
   }
 
-  @Override public void onPointerDrag(Vector3 world, int button, boolean shift, boolean ctrl) {
+  @Override public void onPointerDrag(int button, boolean shift, boolean ctrl) {
     // Dragging handled by BaseSplineTool.update
-    super.onPointerDrag(world, button, shift, ctrl);
+    super.onPointerDrag(button, shift, ctrl);
   }
 
   @Override public void update(float dt, Camera cam) {
@@ -214,8 +214,8 @@ public final class RiverTool extends BaseSplineTool {
     super.update(dt, cam);
   }
 
-  @Override public void onPointerUp(Vector3 world, int button, boolean shift, boolean ctrl) {
-    super.onPointerUp(world, button, shift, ctrl);
+  @Override public void onPointerUp(int button, boolean shift, boolean ctrl) {
+    super.onPointerUp(button, shift, ctrl);
   }
 
   // ----- Base hooks -----

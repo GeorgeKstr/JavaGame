@@ -3,6 +3,7 @@ package com.example.game.World.Editor.Tools.Splines;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.graphics.Camera;
 import com.badlogic.gdx.math.Vector3;
+import com.badlogic.gdx.math.collision.Ray;
 import com.example.game.World.Editor.EditorContext;
 import com.example.game.World.Editor.Layers.SplinesLayer;
 import com.example.game.World.Editor.Tools.Tool;
@@ -28,9 +29,11 @@ public abstract class BaseSplineTool implements Tool {
     EditorContext.setSelectedPlaceable(null);
   }
 
-  @Override public void onPointerDown(Vector3 world, int button, boolean shift, boolean ctrl) {
+  @Override public void onPointerDown(int button, boolean shift, boolean ctrl) {
     if (button == com.badlogic.gdx.Input.Buttons.LEFT) {
       if (ctrl) {
+        Ray ray = EditorContext.getCamera().getPickRay(Gdx.input.getX(), Gdx.input.getY());
+        Vector3 world = terrain.getPicker().rayIntersectTerrain(ray, terrain.getBaseHeightSampler(), 0.25f, 6);
         handleCtrlInsert(world);
         return;
       }
@@ -55,7 +58,7 @@ public abstract class BaseSplineTool implements Tool {
     }
   }
 
-  @Override public void onPointerDrag(Vector3 world, int button, boolean shift, boolean ctrl) {
+  @Override public void onPointerDrag(int button, boolean shift, boolean ctrl) {
     // Dragging handled in update for performance parity
     return;
   }
@@ -77,7 +80,7 @@ public abstract class BaseSplineTool implements Tool {
     onSelectionChangedUI(sel, idx);
   }
 
-  @Override public void onPointerUp(Vector3 world, int button, boolean shift, boolean ctrl) {
+  @Override public void onPointerUp(int button, boolean shift, boolean ctrl) {
     if (dragging) {
       TerrainSpline sel = layer.getSelectedSpline();
       if (sel != null && sel.getType() == handledType()) {

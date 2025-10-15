@@ -3,6 +3,9 @@ package com.example.game.World.Editor.Tools;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.graphics.Camera;
+import com.badlogic.gdx.graphics.PerspectiveCamera;
+import com.badlogic.gdx.math.Vector3;
+import com.badlogic.gdx.math.collision.Ray;
 import com.badlogic.gdx.scenes.scene2d.ui.*;
 import com.example.game.World.TerrainSystem;
 import com.example.game.World.Editor.BrushOverlay;
@@ -14,6 +17,7 @@ public abstract class AbstractBrushTool implements Tool {
   protected final BrushSettings brush;
   protected final TerrainSystem terrain;
   protected BrushOverlay overlay;
+  public Vector3 world = new Vector3();
   // UI now bound via CVarUI; we keep no local slider references
 
   protected AbstractBrushTool(BrushSettings sharedBrush, TerrainSystem terrain) {
@@ -96,9 +100,15 @@ public abstract class AbstractBrushTool implements Tool {
   }
 
   @Override public void update(float dt, Camera cam) { 
+    
+    Ray ray = ((PerspectiveCamera)cam).getPickRay(Gdx.input.getX(), Gdx.input.getY());
+    Vector3 hit = terrain.getPicker().rayIntersectTerrain(ray, terrain.getBaseHeightSampler(), 0.25f, 8);
+    if (hit != null) world = hit;
+    if(world==null) return;
     int radiusTiles = Math.max(1, Math.round(brush.getRadius() / terrain.getTileSize()));
-    if (overlay != null) overlay.update(cam, terrain, radiusTiles, brush.getFalloff(), terrain.getTileSize());
+    if (overlay != null) overlay.update(world, radiusTiles, brush.getFalloff(), terrain.getTileSize());
   }
 
   @Override public void render3D(Camera cam) { if (overlay != null) overlay.draw(cam);}
+
 }

@@ -31,11 +31,6 @@ public final class EditorInputRouter extends InputAdapter {
     /** WASD-style movement; dt provided by caller (update). */
     void moveWASD(boolean w, boolean a, boolean s, boolean d, float dt);
 
-    /**
-     * Ray-pick the world at the current mouse; write to 'out' and return that same instance.
-     * Return null if nothing was hit.
-     */
-    Vector3 pickOnTerrain(int screenX, int screenY);
   }
 
   private final Access access;
@@ -158,16 +153,14 @@ public final class EditorInputRouter extends InputAdapter {
     EditorLayer layer = access.activeLayer();
     if (layer == null) return;
     
-    Vector3 tmpWorld = access.pickOnTerrain(screenX, screenY);
-    if(tmpWorld== null) return;
 
     boolean shift = Gdx.input.isKeyPressed(Input.Keys.SHIFT_LEFT) || Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT);
     boolean ctrl  = Gdx.input.isKeyPressed(Input.Keys.CONTROL_LEFT) || Gdx.input.isKeyPressed(Input.Keys.CONTROL_RIGHT);
 
     if (layer instanceof BaseToolLayer) {
       BaseToolLayer btl = (BaseToolLayer) layer;
-      if (down) btl.onPointerDown(access.cam(), tmpWorld, Input.Buttons.LEFT, shift, ctrl);
-      else      btl.onPointerDrag(access.cam(), tmpWorld, Input.Buttons.LEFT, shift, ctrl);
+      if (down) btl.onPointerDown(access.cam(), Input.Buttons.LEFT, shift, ctrl);
+      else      btl.onPointerDrag(access.cam(), Input.Buttons.LEFT, shift, ctrl);
     }
   }
 
@@ -175,14 +168,11 @@ public final class EditorInputRouter extends InputAdapter {
     EditorLayer layer = access.activeLayer();
     if (layer == null) return;
 
-    Vector3 tmpWorld = access.pickOnTerrain(screenX, screenY);
-    if(tmpWorld== null) return;
-
     boolean shift = Gdx.input.isKeyPressed(Input.Keys.SHIFT_LEFT) || Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT);
     boolean ctrl  = Gdx.input.isKeyPressed(Input.Keys.CONTROL_LEFT) || Gdx.input.isKeyPressed(Input.Keys.CONTROL_RIGHT);
 
     if (layer instanceof BaseToolLayer) {
-      ((BaseToolLayer) layer).onPointerUp(access.cam(), tmpWorld, Input.Buttons.LEFT, shift, ctrl);
+      ((BaseToolLayer) layer).onPointerUp(access.cam(), Input.Buttons.LEFT, shift, ctrl);
     }
   }
 }

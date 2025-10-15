@@ -194,12 +194,12 @@ public final class RoadTool extends BaseSplineTool {
 
   @Override public void onSelected() { active = null; super.onSelected(); }
 
-  @Override public void onPointerDown(Vector3 world, int button, boolean shift, boolean ctrl) {
-    super.onPointerDown(world, button, shift, ctrl);
+  @Override public void onPointerDown(int button, boolean shift, boolean ctrl) {
+    super.onPointerDown(button, shift, ctrl);
   }
 
-  @Override public void onPointerDrag(Vector3 world, int button, boolean shift, boolean ctrl) {
-    super.onPointerDrag(world, button, shift, ctrl);
+  @Override public void onPointerDrag(int button, boolean shift, boolean ctrl) {
+    super.onPointerDrag(button, shift, ctrl);
   }
 
   @Override public void update(float dt, Camera cam) {
@@ -230,8 +230,8 @@ public final class RoadTool extends BaseSplineTool {
     super.update(dt, cam);
   }
 
-  @Override public void onPointerUp(Vector3 world, int button, boolean shift, boolean ctrl) {
-    super.onPointerUp(world, button, shift, ctrl);
+  @Override public void onPointerUp(int button, boolean shift, boolean ctrl) {
+    super.onPointerUp(button, shift, ctrl);
   }
 
   // ----- Base hooks -----

@@ -41,16 +41,15 @@ public final class BrushOverlay {
   }
 
   /** Update from mouse → world; brushRadiusTiles is in *cells*, tileSize in *meters*. */
-  public void update(Camera cam, HeightSampler sampler, int brushRadiusTiles, float brushFalloff, float tileSize) {
-    // Get a pick ray in window coords (libGDX handles viewport + Y orientation)
-    int sx = Gdx.input.getX();
-    int sy = Gdx.input.getY();
-    Ray ray = ((PerspectiveCamera) cam).getPickRay(sx, sy);
+  public void update(Vector3 position, int brushRadiusTiles, float brushFalloff, float tileSize) {
+    
 
     // Intersect against the terrain heightfield using the shared picker (hill-aware),
     // fallback to fast plane if no intersection is found within range.
-    Vector3 hit = terrain.getPicker().rayIntersectTerrainFastPlane(ray, sampler);
+    hasHit = false;
+    Vector3 hit = position;
     if (hit == null) return;
+    hasHit = true;
 
     center.set(hit.x, hit.y + 0.02f, hit.z);
     radiusWorld = Math.max(1, brushRadiusTiles) * tileSize;

@@ -19,9 +19,9 @@ public interface Tool {
   default void update(float dt, Camera cam) {}
 
   // Pointer actions in world space (ray-hit position already resolved by layer)
-  default void onPointerDown(Vector3 world, int button, boolean shift, boolean ctrl) {}
-  default void onPointerDrag(Vector3 world, int button, boolean shift, boolean ctrl) {}
-  default void onPointerUp(Vector3 world, int button, boolean shift, boolean ctrl) {}
+  default void onPointerDown(int button, boolean shift, boolean ctrl) {}
+  default void onPointerDrag(int button, boolean shift, boolean ctrl) {}
+  default void onPointerUp(int button, boolean shift, boolean ctrl) {}
   default void render3D(Camera cam) {}
   default boolean scrolled(float amountX, float amountY) {return false;};
 }
