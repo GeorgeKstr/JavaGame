@@ -102,7 +102,7 @@ public abstract class AbstractBrushTool implements Tool {
   @Override public void update(float dt, Camera cam) { 
     
     Ray ray = ((PerspectiveCamera)cam).getPickRay(Gdx.input.getX(), Gdx.input.getY());
-    Vector3 hit = terrain.getPicker().rayIntersectTerrain(ray, terrain.getBaseHeightSampler(), 0.25f, 8);
+    Vector3 hit = terrain.getPicker().rayIntersectTerrain(ray, terrain.getBaseHeightSampler());
     if (hit != null) world = hit;
     if(world==null) return;
     int radiusTiles = Math.max(1, Math.round(brush.getRadius() / terrain.getTileSize()));

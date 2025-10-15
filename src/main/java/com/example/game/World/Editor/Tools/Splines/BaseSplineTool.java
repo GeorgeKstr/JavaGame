@@ -33,7 +33,7 @@ public abstract class BaseSplineTool implements Tool {
     if (button == com.badlogic.gdx.Input.Buttons.LEFT) {
       if (ctrl) {
         Ray ray = EditorContext.getCamera().getPickRay(Gdx.input.getX(), Gdx.input.getY());
-        Vector3 world = terrain.getPicker().rayIntersectTerrain(ray, terrain.getBaseHeightSampler(), 0.25f, 6);
+        Vector3 world = terrain.getPicker().rayIntersectTerrain(ray, terrain.getBaseHeightSampler());
         handleCtrlInsert(world);
         return;
       }
@@ -72,7 +72,7 @@ public abstract class BaseSplineTool implements Tool {
     int sy = Gdx.input.getY();
     com.badlogic.gdx.math.collision.Ray ray = cam.getPickRay(sx, sy);
     var picker = terrain.getPicker();
-    Vector3 hit = picker.rayIntersectTerrain(ray, terrain.getBaseHeightSampler(), dragRayStep(), dragRaySteps());
+    Vector3 hit = picker.rayIntersectTerrain(ray, terrain.getBaseHeightSampler());
     if (hit == null) return;
     sel.setNodePos(idx, new Vector3(hit.x, hit.y + 0.05f, hit.z));
     sel.markRibbonDirty();

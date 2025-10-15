@@ -46,6 +46,82 @@ public class TerrainEditor {
     return true;
   }
 
+  /**
+   * Set heights toward an absolute target height (in meters) within a circular brush.
+   * Uses rotated-grid supersampling and a blended falloff profile (quintic vs gaussian)
+   * controlled by 'falloff' in [0..1]. Mirrors edges to shared neighbors to avoid cracks.
+   */
+  public boolean setHeightsToValueCircle(int gx, int gz, int radius, float targetMeters, float falloff) {
+    if (radius <= 0) return false;
+    final float fall = clamp01(falloff);
+
+    boolean changed = false; Index p = new Index(); Index[] ns = {new Index(),new Index(),new Index(),new Index(),new Index(),new Index(),new Index(),new Index()};
+    final int S = w.S; final float yScale = w.yScale;
+
+    // 4x4 rotated-grid supersampling per cell with per-cell deterministic jitter (AA edges)
+    final float ROT = 0.463647609f; // ~26.565°, tan=0.5
+    final float CS = (float)Math.cos(ROT);
+    final float SN = (float)Math.sin(ROT);
+
+    // helper to shape radial weight with falloff blending (0 crisp -> 1 soft)
+    java.util.function.Function<Float, Float> shape = rr -> {
+      float s = clamp01(1f - rr);
+      float q = smootherstep5(s); // quintic finite support
+      float sigma = 0.32f + 0.30f * fall; // normalized sigma ~0.32..0.62
+      float g = (float)Math.exp(-(rr*rr)/(2f*sigma*sigma));
+      return lerp(q, g, fall);
+    };
+
+    int R = radius + 1; // expand bounds to capture partial coverage near edges
+    for (int dz = -R; dz <= R; dz++) {
+      for (int dx = -R; dx <= R; dx++) {
+        int gxi = gx + dx, gzi = gz + dz;
+        if (!primaryIndex(gxi, gzi, p)) continue;
+        TerrainChunk tc = get(p.cx, p.cz); if (tc == null) continue;
+        short[] arr = tc.getHeightsArray(); int idx = p.lz * S + p.lx; short cur = arr[idx];
+
+        // supersample to compute blended coverage weight f in [0..1]
+        int h = hash32(gxi, gzi);
+        float fSum = 0f;
+        for (int sIdx = 0; sIdx < 16; ++sIdx) {
+          int sxi = sIdx & 3; int szi = sIdx >> 2; // 0..3
+          float ox = ((sxi + rand01(h + sIdx*73)) - 1.5f) * 0.5f;
+          float oz = ((szi + rand01(h + sIdx*91)) - 1.5f) * 0.5f;
+          float rx = ox * CS - oz * SN;
+          float rz = ox * SN + oz * CS;
+          float px = dx + rx; float pz = dz + rz;
+          float rr = (float)Math.sqrt(px*px + pz*pz) / (float)radius;
+          if (rr >= 1f) continue;
+          fSum += shape.apply(rr);
+        }
+        float f = fSum * (1f/16f);
+        if (f <= 0f) continue;
+
+        // Blend current toward absolute target by weight f
+        float curMeters = cur * yScale;
+        float nextMeters = curMeters + (targetMeters - curMeters) * f;
+        short next = (short)Math.round(nextMeters / yScale);
+        if (next != cur) {
+          arr[idx] = next;
+          short[] base = tc.getBaselineArray(); if (base!=null) base[idx]=next; else tc.ensureBaseline();
+          tc.setDirty(true); changed = true;
+          // Mirror to neighbor chunks to avoid cracks (and persist in baseline)
+          int ncount = neighborsForSample(p, ns);
+          for (int i = 0; i < ncount; i++) {
+            TerrainChunk nb = get(ns[i].cx, ns[i].cz); if (nb == null) continue;
+            short[] harr = nb.getHeightsArray(); int nidx = ns[i].lz * S + ns[i].lx;
+            if (harr[nidx] != next) {
+              harr[nidx] = next;
+              short[] bArr = nb.getBaselineArray(); if (bArr!=null) bArr[nidx]=next; else nb.ensureBaseline();
+              nb.setDirty(true);
+            }
+          }
+        }
+      }
+    }
+    return changed;
+  }
+
   /** Restore heights from each chunk's baseline in a circular region (idempotent baking). */
   public boolean restoreFromBaselineCircle(int gx, int gz, int radius) {
     if (radius <= 0) return false;

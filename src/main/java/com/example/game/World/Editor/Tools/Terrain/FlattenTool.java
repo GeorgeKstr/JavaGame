@@ -10,8 +10,9 @@ import com.example.game.World.Editor.Tools.AbstractBrushTool;
 import com.example.game.World.Editor.Tools.BrushSettings;
 
 /**
- * Hard Flatten-to-0 brush.
- * - No easing: each stamp sets all covered samples to 0.
+ * Floor brush: set terrain to a preset absolute height instantly, with falloff smoothing at edges.
+ * - Target height comes from brush strength mapped to [-100m .. +100m].
+ * - Uses TerrainEditor.setHeightsToValueCircle with blended falloff.
  * - Minimal throttling so drag doesn't spam redundant work.
  */
 public final class FlattenTool extends AbstractBrushTool {
@@ -27,12 +28,12 @@ public final class FlattenTool extends AbstractBrushTool {
 
   public FlattenTool(TerrainSystem terrain, BrushSettings sharedBrush) { super(sharedBrush, terrain); }
 
-  @Override public String name() { return "Flatten"; }
+  @Override public String name() { return "Floor"; }
 
   @Override
   public void buildUI(Table parent, Skin skin) {
     addBrushUI(parent, skin);
-    parent.add(new Label("Click/drag to set terrain height to 0.", skin))
+    parent.add(new Label("Click/drag to set terrain to preset height (Intensity→Height: -100m..+100m).", skin))
           .left().padTop(6).row();
   }
 
@@ -76,12 +77,17 @@ public final class FlattenTool extends AbstractBrushTool {
   }
 
   private void stampAt(Vector3 wpos) {
-    int rCells = Math.max(1, (int)brush.getRadius()); // radius already in cells in your tools
+    int rCells = Math.max(1, (int)brush.getRadius());
     float tile = terrain.getTileSize();
     int gx = (int)Math.floor(wpos.x / tile);
     int gz = (int)Math.floor(wpos.z / tile);
 
-    if (terrain.getEditor().setHeightsToZeroCircle(gx, gz, rCells/2)) {
+    // Map brush intensity [0..1] → target height [-100m .. +100m]
+    float strength = brush.getStrength();
+    float targetMeters = (strength * 2f - 1f) * 100f;
+    float fall = brush.getFalloff();
+
+    if (terrain.getEditor().setHeightsToValueCircle(gx, gz, rCells/2, targetMeters, fall)) {
       terrain.rebuildDirtyChunks();
     }
   }

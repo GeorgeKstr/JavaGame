@@ -33,10 +33,10 @@ public class TerrainPicking {
   }
 
   /**
-   * Raycast from screen (sx, sy) to the terrain. Writes the hit world position to 'out'.
-   * @return true if a surface was hit (either actual terrain crossing, or plane fallback).
+   * Raycast a world-space ray to the terrain using cellwise DDA and exact triangle tests.
+   * Returns the hit world position, or null if it missed loaded terrain.
    */
-  public Vector3 rayIntersectTerrain(Ray ray, HeightSampler s, float step, int refineIters) {
+  public Vector3 rayIntersectTerrain(Ray ray, HeightSampler s) {
     float tile = s.getTileSize();
     if (!(tile > 0f)) tile = 1f;
     float maxT = 4000f;
@@ -64,6 +64,8 @@ public class TerrainPicking {
     float tDeltaZ = (Math.abs(dz) > 1e-8f) ? (tile / Math.abs(dz)) : Float.POSITIVE_INFINITY;
 
     float tCurr = 0f;
+    float bestT = Float.POSITIVE_INFINITY;
+    Vector3 best = null;
     int maxSteps = 4096;
     for (int steps = 0; steps < maxSteps && tCurr <= maxT; steps++) {
       float x0 = gx * tile;
@@ -94,8 +96,68 @@ public class TerrainPicking {
         if (th >= tEnter - 1e-6f && th <= tExit + 1e-6f && th >= 0f) tHit = Math.min(tHit, th);
 
         if (tHit != Float.POSITIVE_INFINITY) {
-          Vector3 out = new Vector3(ray.origin).mulAdd(ray.direction, tHit);
-          return out;
+          if (tHit < bestT) {
+            bestT = tHit;
+            if (best == null) best = new Vector3();
+            best.set(ray.origin).mulAdd(ray.direction, tHit);
+          }
+        }
+
+        // Fallback: bilinear surface root-find within the cell segment [tEnter, tExit]
+        // Helps when triangle tests miss due to degeneracy/precision near edges
+        // Define f(t) = y_ray(t) - h_bilinear(u(t), v(t)) and solve f(t)=0 by bisection
+        float y0 = ray.origin.y + tEnter * ray.direction.y;
+        float x0r = ray.origin.x + tEnter * ray.direction.x;
+        float z0r = ray.origin.z + tEnter * ray.direction.z;
+        float u0 = (x0r - x0) / tile; float v0 = (z0r - z0) / tile;
+        // Clamp slightly inside [0,1] to avoid sampling just outside cell due to float error
+        u0 = Math.max(0f, Math.min(1f, u0)); v0 = Math.max(0f, Math.min(1f, v0));
+        float hb0 = h00*(1f-u0)*(1f-v0) + h10*u0*(1f-v0) + h01*(1f-u0)*v0 + h11*u0*v0;
+        float f0 = y0 - hb0;
+
+        float y1 = ray.origin.y + tExit * ray.direction.y;
+        float x1r = ray.origin.x + tExit * ray.direction.x;
+        float z1r = ray.origin.z + tExit * ray.direction.z;
+        float u1 = (x1r - x0) / tile; float v1 = (z1r - z0) / tile;
+        u1 = Math.max(0f, Math.min(1f, u1)); v1 = Math.max(0f, Math.min(1f, v1));
+        float hb1 = h00*(1f-u1)*(1f-v1) + h10*u1*(1f-v1) + h01*(1f-u1)*v1 + h11*u1*v1;
+        float f1 = y1 - hb1;
+
+        // If signs differ or one endpoint is very close to zero, do bisection
+        if (!(Float.isNaN(f0) || Float.isNaN(f1))) {
+          final float EPS = 1e-5f;
+          boolean nearZero0 = Math.abs(f0) <= EPS;
+          boolean nearZero1 = Math.abs(f1) <= EPS;
+          if (nearZero0 || nearZero1 || f0 * f1 < 0f) {
+            float a = tEnter, b = tExit;
+            float fa = f0, fb = f1;
+            // Tighten bracket if endpoints are outside due to precision
+            for (int it = 0; it < 18; it++) {
+              float mid = 0.5f * (a + b);
+              float ym = ray.origin.y + mid * ray.direction.y;
+              float xm = ray.origin.x + mid * ray.direction.x;
+              float zm = ray.origin.z + mid * ray.direction.z;
+              float um = (xm - x0) / tile; float vm = (zm - z0) / tile;
+              um = Math.max(0f, Math.min(1f, um)); vm = Math.max(0f, Math.min(1f, vm));
+              float hbm = h00*(1f-um)*(1f-vm) + h10*um*(1f-vm) + h01*(1f-um)*vm + h11*um*vm;
+              float fm = ym - hbm;
+              if (Math.abs(fm) <= EPS) { a = b = mid; fa = fb = fm; break; }
+              // Prefer side that brackets zero; if not, choose the side with smaller |f|
+              if (fa * fm <= 0f) { b = mid; fb = fm; }
+              else if (fm * fb <= 0f) { a = mid; fa = fm; }
+              else {
+                if (Math.abs(fa) < Math.abs(fb)) { b = mid; fb = fm; } else { a = mid; fa = fm; }
+              }
+            }
+            float tRoot = 0.5f * (a + b);
+            if (tRoot >= tEnter - 1e-6f && tRoot <= tExit + 1e-6f && tRoot >= 0f) {
+              if (tRoot < bestT) {
+                bestT = tRoot;
+                if (best == null) best = new Vector3();
+                best.set(ray.origin).mulAdd(ray.direction, tRoot);
+              }
+            }
+          }
         }
       }
 
@@ -108,8 +170,11 @@ public class TerrainPicking {
         tCurr = tMaxZ;
         tMaxZ += tDeltaZ;
       }
+
+      // If we've advanced beyond the current best intersection along the ray, we can stop
+      if (bestT != Float.POSITIVE_INFINITY && tCurr > bestT + 1e-6f) break;
     }
-    return null;
+    return best;
   }
 
   /**
