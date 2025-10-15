@@ -25,8 +25,7 @@ public final class RenderBootstrap {
     // Passes
     SkyPass sky = new SkyPass(); sky.init();
     TerrainPass terrainPass = new TerrainPass(terrain); terrainPass.init();
-    GodRaysPass rays = new GodRaysPass(sky, terrainPass); rays.init(Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
-
+    
     // Birds
     Texture birdTex = new Texture(Gdx.files.internal("textures/bird_silhouette.png"), true);
     birdTex.setFilter(TextureFilter.MipMapLinearLinear, TextureFilter.Linear);
@@ -42,6 +41,7 @@ public final class RenderBootstrap {
     birds.setCenterRepel(cfg.birdsCenterRepel);
     birds.setHorizonBias(cfg.birdsHorizonBias);
 
+    GodRaysPass rays = new GodRaysPass(sky, terrainPass, birds); rays.init(Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
     // Rays exposure
     rays.setExposure(cfg.raysExposure);
 

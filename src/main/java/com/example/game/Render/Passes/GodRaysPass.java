@@ -10,12 +10,14 @@ public final class GodRaysPass implements RenderPass {
   private final GodRaysRenderer godrays = new GodRaysRenderer();
   private final SkyPass skyPass;
   private final TerrainPass terrainPass;
+  private final BirdsPass birdsPass;
 
   public float exposure = 0.8f; // default; HUD will change this
 
-  public GodRaysPass(SkyPass skyPass, TerrainPass terrainPass) {
+  public GodRaysPass(SkyPass skyPass, TerrainPass terrainPass, BirdsPass birdsPass) {
     this.skyPass = skyPass;
     this.terrainPass = terrainPass;
+    this.birdsPass = birdsPass;
   }
 
   public void init(int w, int h) { godrays.init(w, h); }
@@ -32,6 +34,7 @@ public final class GodRaysPass implements RenderPass {
       // bright sky
       skyPass.render(ctx);
       // black occluders
+      birdsPass.renderOcclusion(ctx);
       terrainPass.renderSolidBlack(ctx);
     godrays.endOcclusion(Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
 

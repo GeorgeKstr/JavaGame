@@ -14,7 +14,7 @@ uniform vec3 u_sunColor;
 uniform float u_reverseFlow; // 0 = normal, 1 = reversed
 
 /* ===================== Ultra-calm tunables ===================== */
-const float FLOW_SPEED        = 0.040;  // << tiny downstream drift (set 0.0 to freeze)
+const float FLOW_SPEED        = 0.060;  // << tiny downstream drift (set 0.0 to freeze)
 const float WARP_STRENGTH     = 0.1;    // static domain warp strength (world-anchored)
 const float WARP_FREQ         = 0.55;   // warp scale (world-anchored)
 const float HEIGHT_SCALE      = 0.045;  // parallax scale (view-only, no time)
