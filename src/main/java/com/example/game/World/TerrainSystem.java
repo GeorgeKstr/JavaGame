@@ -378,7 +378,9 @@ public class TerrainSystem implements HeightSampler {
             int idx = gz * S + gx;
             int deltaUnits = Math.round(deltaMetersAvg / Math.max(1e-6f, yScale));
             int base = baseHeights[idx];
-            int nv = base + deltaUnits; // additive over baseline to avoid cumulative double-apply
+            // Preserve any prior processor adjustments already in heights[] regardless of order
+            int preserved = heights[idx] - base; // e.g., river depth or other post effects
+            int nv = base + preserved + deltaUnits; // stack mountain over prior deltas
             if (nv < Short.MIN_VALUE) nv = Short.MIN_VALUE; else if (nv > Short.MAX_VALUE) nv = Short.MAX_VALUE;
             heights[idx] = (short)nv;
           }

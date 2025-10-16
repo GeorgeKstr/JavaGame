@@ -20,6 +20,8 @@ public final class EditorCamera {
 
   private final Settings settings;
   private HeightSampler heightSampler; // optional, for ground clamping
+  private boolean clampToGround = false; // when true, pivot.y snaps to terrain
+  private boolean lockPivotYZero = true; // when true, force pivot.y = 0 (RTS plane)
 
   // Spherical state around pivot
   private final Vector3 pivot = new Vector3(0, 0, 0);
@@ -36,6 +38,8 @@ public final class EditorCamera {
   private final Vector3 dir = new Vector3();
   private final Vector3 right = new Vector3();
   private final Vector3 up = new Vector3();
+  // Optional: terrain system for precise raycast-based zoom clamping
+  private com.example.game.World.TerrainSystem terrainRef;
 
   public EditorCamera(Settings settings) {
     this.settings = settings;
@@ -43,6 +47,36 @@ public final class EditorCamera {
 
   /** Provide terrain sampler to enable ground clamping logic. */
   public void setHeightSampler(HeightSampler sampler) { this.heightSampler = sampler; }
+
+  /** Provide TerrainSystem to enable raycast clamping during zoom. */
+  public void setTerrainForRaycast(com.example.game.World.TerrainSystem terrain) { this.terrainRef = terrain; }
+
+  /** Enable/disable snapping pivot.y to sampled ground. */
+  public void setClampToGround(boolean on) { this.clampToGround = on; }
+
+  /** Lock pivot to y=0 plane (RTS style). */
+  public void setLockPivotYZero(boolean on) { this.lockPivotYZero = on; }
+
+  /** Serializable camera state for persistence between tool switches. */
+  public static final class State {
+    public final Vector3 pivot = new Vector3();
+    public float yawDeg;
+    public float pitchDeg;
+    public float distance;
+  }
+
+  public State getState() {
+    State s = new State();
+    s.pivot.set(pivot);
+    s.yawDeg = yawDeg; s.pitchDeg = pitchDeg; s.distance = distance;
+    return s;
+  }
+
+  public void setState(State s) {
+    if (s == null) return;
+    pivot.set(s.pivot);
+    yawDeg = s.yawDeg; pitchDeg = s.pitchDeg; distance = s.distance;
+  }
 
   /** Current world-space focus/pivot. */
   public Vector3 focus() { return pivot; }
@@ -82,7 +116,31 @@ public final class EditorCamera {
   public void zoom(float amount) {
     // Exponential zoom feels better across scales
     float mul = (float)Math.exp(amount * zoomFactor);
-    distance = MathUtils.clamp(distance * mul, 1.0f, 2000f);
+    float desired = MathUtils.clamp(distance * mul, 1.0f, 2000f);
+
+    // If zooming OUT and terrain is available, clamp by raycast from pivot toward camera
+    if (terrainRef != null && desired > distance) {
+      // Recompute forward dir from yaw/pitch (same math as update)
+      float yawRad = yawDeg * MathUtils.degreesToRadians;
+      float pitchRad = pitchDeg * MathUtils.degreesToRadians;
+      float cp = MathUtils.cos(pitchRad);
+      Vector3 fwd = new Vector3(
+        MathUtils.sin(yawRad) * cp,
+        MathUtils.sin(pitchRad),
+        -MathUtils.cos(yawRad) * cp
+      ).nor();
+      // Ray points from pivot to camera direction (backwards along forward)
+      Vector3 dirToCam = new Vector3(fwd).scl(-1f).nor();
+      com.badlogic.gdx.math.collision.Ray ray = new com.badlogic.gdx.math.collision.Ray(new Vector3(pivot), dirToCam);
+      Vector3 hit = terrainRef.getPicker().rayIntersectTerrain(ray, terrainRef);
+      if (hit != null) {
+        float clearance = 1.0f; // meters to keep from terrain
+        float maxDist = hit.dst(pivot) - clearance;
+        if (maxDist < desired) desired = Math.max(1.0f, maxDist);
+      }
+    }
+
+    distance = desired;
   }
 
   /**
@@ -126,12 +184,13 @@ public final class EditorCamera {
       -MathUtils.cos(yawRad) * cp
     ).nor();
 
-    // Optionally snap pivot.y to terrain height to keep origin on top of terrain
+    // Vertical pivot policy
     float ground = pivot.y;
-    if (heightSampler != null) {
+    if (lockPivotYZero) {
+      pivot.y = 0f; ground = 0f;
+    } else if (clampToGround && heightSampler != null) {
       float h = heightSampler.heightAt(pivot.x, pivot.z, pivot.y);
-      if (!Float.isNaN(h) && h != Float.NEGATIVE_INFINITY) ground = h;
-      pivot.y = ground;
+      if (!Float.isNaN(h) && h != Float.NEGATIVE_INFINITY) { ground = h; pivot.y = ground; }
     }
 
     // Position the camera on the sphere, looking at pivot

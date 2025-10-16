@@ -5,6 +5,7 @@ import com.badlogic.gdx.Input;
 import com.badlogic.gdx.InputAdapter;
 import com.badlogic.gdx.graphics.Camera;
 import com.badlogic.gdx.math.Vector3;
+import com.example.game.World.Editor.Tools.Tool;
 
 /**
  * Unified editor input:
@@ -136,12 +137,41 @@ public final class EditorInputRouter extends InputAdapter {
 
   /** Call this each frame to keep keyboard movement responsive. */
   public void update(float dt) {
-    boolean w = Gdx.input.isKeyPressed(Input.Keys.UP);
-    boolean a = Gdx.input.isKeyPressed(Input.Keys.LEFT);
-    boolean s = Gdx.input.isKeyPressed(Input.Keys.DOWN);
-    boolean d = Gdx.input.isKeyPressed(Input.Keys.RIGHT);
-    if (w || a || s || d) {
-      access.moveWASD(w, a, s, d, dt);
+    // Arrow keys always control movement (RTS and FPS)
+    boolean upArrow = Gdx.input.isKeyPressed(Input.Keys.UP);
+    boolean lfArrow = Gdx.input.isKeyPressed(Input.Keys.LEFT);
+    boolean dnArrow = Gdx.input.isKeyPressed(Input.Keys.DOWN);
+    boolean rtArrow = Gdx.input.isKeyPressed(Input.Keys.RIGHT);
+
+    // WASD only when Walk+Roam and cursor is captured
+    EditorLayer layer = access.activeLayer();
+    boolean roamActive = false;
+    if (layer != null && "walk".equals(layer.id()) && layer instanceof BaseToolLayer) {
+      Tool t = ((BaseToolLayer) layer).getActiveTool();
+      roamActive = (t != null && "Roam".equals(t.name()));
+    }
+    boolean allowWASD = roamActive && Gdx.input.isCursorCatched();
+    boolean upW = allowWASD && Gdx.input.isKeyPressed(Input.Keys.W);
+    boolean lfA = allowWASD && Gdx.input.isKeyPressed(Input.Keys.A);
+    boolean dnS = allowWASD && Gdx.input.isKeyPressed(Input.Keys.S);
+    boolean rtD = allowWASD && Gdx.input.isKeyPressed(Input.Keys.D);
+
+    boolean up = upArrow || upW;
+    boolean lf = lfArrow || lfA;
+    boolean dn = dnArrow || dnS;
+    boolean rt = rtArrow || rtD;
+
+    if (up || lf || dn || rt) {
+      access.moveWASD(up, lf, dn, rt, dt);
+    }
+
+    // Continuous mouse-look for Walk layer when cursor is captured
+    EditorLayer layer2 = access.activeLayer();
+    boolean walk = (layer2 != null && "walk".equals(layer2.id()));
+    if (walk && Gdx.input.isCursorCatched()) {
+      float dx = Gdx.input.getDeltaX();
+      float dy = -Gdx.input.getDeltaY();
+      if (dx != 0f || dy != 0f) access.cameraOrbit(dx, dy);
     }
   }
 

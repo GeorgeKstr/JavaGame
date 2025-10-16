@@ -94,6 +94,17 @@ public abstract class BaseToolLayer implements EditorLayer {
 
   public Tool getActiveTool() { return active; }
 
+  /** Programmatically switch the active tool and rebuild the tool UI. */
+  public void setActiveTool(Tool t, Skin skin) {
+    if (t == null || t == active) return;
+    if (!tools.contains(t)) return;
+    if (active != null) active.onDeselected();
+    active = t;
+    if (group != null) group.setChecked(active.name());
+    active.onSelected();
+    rebuildToolUI(skin);
+  }
+
   @Override public void update(float dt, Skin skin) {
     int numKey = -1;
     if (Gdx.input.isKeyPressed(Input.Keys.NUM_1)) numKey = 1;

@@ -31,6 +31,9 @@ public class EditorScreen implements Screen {
   // core
   private PerspectiveCamera cam;
   private final EditorCamera edCam;
+  private com.example.game.World.Editor.FpsCameraController fpsCam;
+  private com.example.game.World.Editor.EditorCamera.State rtsState;
+  private com.example.game.World.Editor.FpsCameraController.State fpsState;
   private final LayerManager layers = new LayerManager();
   private final Vector3 sunDirWorld = new Vector3(-0.4f, -1f, -0.3f).nor();
   private float hour = 12f, elapsed = 0f;
@@ -71,6 +74,28 @@ public class EditorScreen implements Screen {
   public EditorScreen(GameApp app, String mapPath, Settings settings) {
     this.app = app; this.mapPath = mapPath; this.settings = settings;
     this.edCam = new EditorCamera(settings);
+  }
+
+  private void drawCrosshair() {
+    int w = Gdx.graphics.getWidth();
+    int h = Gdx.graphics.getHeight();
+    int cx = w / 2; int cy = h / 2;
+    int len = 8; int gap = 3;
+    com.badlogic.gdx.math.Matrix4 ortho = new com.badlogic.gdx.math.Matrix4().setToOrtho2D(0,0,w,h);
+    Gdx.gl.glDisable(GL20.GL_DEPTH_TEST);
+    imAvg.begin(ortho, GL20.GL_LINES);
+    float a = 0.9f;
+    // horizontal
+    imAvg.color(1f,1f,1f,a); imAvg.vertex(cx - (gap + len), cy, 0);
+    imAvg.color(1f,1f,1f,a); imAvg.vertex(cx - gap, cy, 0);
+    imAvg.color(1f,1f,1f,a); imAvg.vertex(cx + gap, cy, 0);
+    imAvg.color(1f,1f,1f,a); imAvg.vertex(cx + (gap + len), cy, 0);
+    // vertical
+    imAvg.color(1f,1f,1f,a); imAvg.vertex(cx, cy - (gap + len), 0);
+    imAvg.color(1f,1f,1f,a); imAvg.vertex(cx, cy - gap, 0);
+    imAvg.color(1f,1f,1f,a); imAvg.vertex(cx, cy + gap, 0);
+    imAvg.color(1f,1f,1f,a); imAvg.vertex(cx, cy + (gap + len), 0);
+    imAvg.end();
   }
 
   /** Compute an approximate average RGB color [0..1] for a ground texture id, sampled from the map resource. */
@@ -367,6 +392,13 @@ public class EditorScreen implements Screen {
     terrain.setWireframe(Boolean.TRUE.equals(CVars.RENDER_TERRAIN_WIREFRAME.get()));
     terrain.setChunkGrid(Boolean.TRUE.equals(CVars.RENDER_TERRAIN_CHUNK_GRID.get()));
     this.edCam.setHeightSampler(terrain);
+    this.edCam.setClampToGround(false);
+    this.edCam.setLockPivotYZero(true);
+    // FPS controller init
+    this.fpsCam = new com.example.game.World.Editor.FpsCameraController();
+    // Seed states
+    this.rtsState = edCam.getState();
+    this.fpsState = fpsCam.getState();
     // Initial values from CVars (kept in sync with Settings)
     hour = CVars.RENDER_TIME_OF_DAY.get();
     updateSunFromHour();
@@ -411,7 +443,7 @@ public class EditorScreen implements Screen {
     hud = new EditorHUD();
     terrainLayerRef = new TerrainLayer(terrain, hud.skin());
     layers.add(terrainLayerRef);
-    layers.add(new WalkLayer(terrain, hud.skin()));
+    layers.add(new WalkLayer(terrain, hud.skin(), fpsCam));
     splinesLayerRef = new SplinesLayer(terrain, hud.skin());
     layers.add(splinesLayerRef);
 
@@ -494,9 +526,15 @@ public class EditorScreen implements Screen {
     showOuterLod = Boolean.TRUE.equals(CVars.RENDER_SHOW_OUTER_LOD.get());
 
     // Input
-    inputRouter = EditorBootstrap.inputRouter(layers, edCam, cam, terrain);
-    // Route input based on focus/hover: Stage first when over/focused; otherwise camera/tools first
-    com.example.game.UI.Editor.StageAwareInputRouter router = new com.example.game.UI.Editor.StageAwareInputRouter(hud.stage(), inputRouter);
+    inputRouter = EditorBootstrap.inputRouter(layers, edCam, fpsCam, cam, terrain);
+    // Route input based on focus/hover. When in Walk with cursor captured, disable UI handling.
+    com.example.game.UI.Editor.StageAwareInputRouter router = new com.example.game.UI.Editor.StageAwareInputRouter(
+      hud.stage(), inputRouter, () -> {
+        com.example.game.World.Editor.EditorLayer al = layers.active();
+        boolean walk = (al != null && "walk".equals(al.id()));
+        return !(walk && Gdx.input.isCursorCatched());
+      }
+    );
     Gdx.input.setInputProcessor(router);
   }
 
@@ -506,7 +544,17 @@ public class EditorScreen implements Screen {
     ctx.elapsedSeconds = elapsed;
 
     // Update sim
-    edCam.update(cam);
+    // Update active camera:
+    // - Normal layers or Walk+Place: RTS (edCam)
+    // - Walk+Roam: FPS (fpsCam)
+    com.example.game.World.Editor.EditorLayer activeL = layers.active();
+    boolean useFps = false;
+    if (activeL != null && "walk".equals(activeL.id()) && activeL instanceof com.example.game.World.Editor.BaseToolLayer) {
+      com.example.game.World.Editor.Tools.Tool t = ((com.example.game.World.Editor.BaseToolLayer)activeL).getActiveTool();
+      String tn = (t == null ? "" : t.name());
+      useFps = "Roam".equals(tn);
+    }
+    if (useFps) { fpsCam.update(cam); } else { edCam.update(cam); }
     var f = edCam.focus();
     terrain.updateAndStream(f.x, f.z);
     layers.update(dt, hud.skin());
@@ -539,13 +587,40 @@ public class EditorScreen implements Screen {
     // Minimap disabled by default; keep function available
     if (showMinimap) drawHeightMinimap2D();
 
+    // Crosshair when Walk layer is active and cursor is captured
+    com.example.game.World.Editor.EditorLayer active2 = layers.active();
+    boolean walkActive2 = (active2 != null && "walk".equals(active2.id()));
+    if (walkActive2 && Gdx.input.isCursorCatched()) drawCrosshair();
+
     handleInput(dt);
   }
 
   private void handleInput(float dt) {
-    if (Gdx.input.isKeyJustPressed(Input.Keys.F1)) {layers.setActive("terrain"); hud.rebuildLeftPane(layers);}
-    if (Gdx.input.isKeyJustPressed(Input.Keys.F2)) {layers.setActive("walk"); hud.rebuildLeftPane(layers);}
-    if (Gdx.input.isKeyJustPressed(Input.Keys.F3)) {layers.setActive("splines"); hud.rebuildLeftPane(layers);}
+    // Tab switching with camera state persistence
+    if (Gdx.input.isKeyJustPressed(Input.Keys.F1)) {
+      // leaving walk? save fps, restore rts
+      com.example.game.World.Editor.EditorLayer cur = layers.active();
+      if (cur != null && "walk".equals(cur.id())) { this.fpsState = fpsCam.getState(); edCam.setState(rtsState); Gdx.input.setCursorCatched(false); }
+      layers.setActive("terrain"); hud.rebuildLeftPane(layers);
+    }
+    if (Gdx.input.isKeyJustPressed(Input.Keys.F2)) {
+      // switching to walk: save rts, restore fps; capture only if Roam is active
+      this.rtsState = edCam.getState(); fpsCam.setState(fpsState);
+      layers.setActive("walk"); hud.rebuildLeftPane(layers);
+      boolean roamNow = false;
+      var al = layers.active();
+      if (al != null && "walk".equals(al.id()) && al instanceof com.example.game.World.Editor.BaseToolLayer) {
+        var t = ((com.example.game.World.Editor.BaseToolLayer)al).getActiveTool();
+        String tn = (t == null ? "" : t.name());
+        roamNow = "Roam".equals(tn);
+      }
+      Gdx.input.setCursorCatched(roamNow);
+    }
+    if (Gdx.input.isKeyJustPressed(Input.Keys.F3)) {
+      com.example.game.World.Editor.EditorLayer cur = layers.active();
+      if (cur != null && "walk".equals(cur.id())) { this.fpsState = fpsCam.getState(); edCam.setState(rtsState); Gdx.input.setCursorCatched(false); }
+      layers.setActive("splines"); hud.rebuildLeftPane(layers);
+    }
 
     boolean ctrl = Gdx.input.isKeyPressed(Input.Keys.CONTROL_LEFT) || Gdx.input.isKeyPressed(Input.Keys.CONTROL_RIGHT);
     if (ctrl && Gdx.input.isKeyJustPressed(Input.Keys.S)) { saveMap(); performRefresh(); return;}
@@ -564,15 +639,29 @@ public class EditorScreen implements Screen {
         edCam.setFocus(v.x, y, v.z);
       });
     }
+    // In Walk mode: ESC releases mouse capture instead of showing exit dialog
+    com.example.game.World.Editor.EditorLayer cur2 = layers.active();
+    boolean walkMode = (cur2 != null && "walk".equals(cur2.id()));
+    if (walkMode && Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
+      if (Gdx.input.isCursorCatched()) { Gdx.input.setCursorCatched(false); return; }
+    }
     if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
       Dialog dlg = new Dialog("Are you sure?", hud.skin()) {
         @Override protected void result(Object obj) { if (Boolean.TRUE.equals(obj)) app.goToMenu(); }
       };
       dlg.text("Exit to main menu?"); dlg.button("Exit", true); dlg.button("Cancel", false); dlg.show(hud.stage());
     }
-    // Only route camera/tool input when UI does not have keyboard/scroll focus
-    if (hud.stage().getKeyboardFocus() == null && hud.stage().getScrollFocus() == null) {
-      inputRouter.update(dt); // for WASD/arrow movement
+    // Route camera/tool input when UI does not have focus, OR when Walk+Roam is active with cursor captured
+    boolean uiFree = (hud.stage().getKeyboardFocus() == null && hud.stage().getScrollFocus() == null);
+    boolean forceWalkUpdate = false;
+    var active = layers.active();
+    if (active != null && "walk".equals(active.id()) && active instanceof com.example.game.World.Editor.BaseToolLayer) {
+      var t = ((com.example.game.World.Editor.BaseToolLayer)active).getActiveTool();
+      String tn = (t == null ? "" : t.name());
+      forceWalkUpdate = "Roam".equals(tn) && Gdx.input.isCursorCatched();
+    }
+    if (uiFree || forceWalkUpdate) {
+      inputRouter.update(dt); // keyboard and continuous mouse-look
     }
   }
 

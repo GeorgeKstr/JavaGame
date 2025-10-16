@@ -4,6 +4,7 @@ import com.badlogic.gdx.InputProcessor;
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.scenes.scene2d.Actor;
 import com.badlogic.gdx.scenes.scene2d.Stage;
+import java.util.function.BooleanSupplier;
 
 /**
  * Routes input between the Stage (UI) and a secondary InputProcessor (e.g., camera/tools)
@@ -15,6 +16,7 @@ import com.badlogic.gdx.scenes.scene2d.Stage;
 public final class StageAwareInputRouter implements InputProcessor {
   private final Stage stage;
   private final InputProcessor secondary;
+  private final BooleanSupplier uiEnabled;
   private final Vector2 tmp = new Vector2();
 
   // Track which processor captured the pointer on touchDown so drag/up go to the same
@@ -22,11 +24,17 @@ public final class StageAwareInputRouter implements InputProcessor {
   private int lastMouseX = 0, lastMouseY = 0;
 
   public StageAwareInputRouter(Stage stage, InputProcessor secondary) {
+    this(stage, secondary, () -> true);
+  }
+
+  public StageAwareInputRouter(Stage stage, InputProcessor secondary, BooleanSupplier uiEnabled) {
     this.stage = stage;
     this.secondary = secondary;
+    this.uiEnabled = (uiEnabled != null ? uiEnabled : () -> true);
   }
 
   private boolean isOverUI(int screenX, int screenY) {
+    if (!uiEnabled.getAsBoolean()) return false;
     tmp.set(screenX, screenY);
     stage.screenToStageCoordinates(tmp);
     Actor hit = stage.hit(tmp.x, tmp.y, true);
@@ -34,10 +42,13 @@ public final class StageAwareInputRouter implements InputProcessor {
   }
 
   private boolean uiHasFocus() {
-    return stage.getKeyboardFocus() != null || stage.getScrollFocus() != null;
+    return uiEnabled.getAsBoolean() && (stage.getKeyboardFocus() != null || stage.getScrollFocus() != null);
   }
 
   @Override public boolean keyDown(int keycode) {
+    if (!uiEnabled.getAsBoolean()) {
+      return secondary != null && secondary.keyDown(keycode);
+    }
     boolean uiFirst = uiHasFocus();
     if (uiFirst) {
       if (stage.keyDown(keycode)) return true;
@@ -78,38 +89,40 @@ public final class StageAwareInputRouter implements InputProcessor {
       return secondary != null && secondary.touchDown(screenX, screenY, pointer, button);
     } else {
       // Clicked outside UI: explicitly clear UI focus so TextFields de-focus
-      stage.setKeyboardFocus(null);
-      stage.setScrollFocus(null);
+      if (uiEnabled.getAsBoolean()) { stage.setKeyboardFocus(null); stage.setScrollFocus(null); }
       if (secondary != null && secondary.touchDown(screenX, screenY, pointer, button)) return true;
-      return stage.touchDown(screenX, screenY, pointer, button);
+      return uiEnabled.getAsBoolean() && stage.touchDown(screenX, screenY, pointer, button);
     }
   }
 
   @Override public boolean touchUp(int screenX, int screenY, int pointer, int button) {
-    if (pointerCapturedByStage) {
+    if (pointerCapturedByStage && uiEnabled.getAsBoolean()) {
       if (stage.touchUp(screenX, screenY, pointer, button)) { pointerCapturedByStage = false; return true; }
       boolean handled = secondary != null && secondary.touchUp(screenX, screenY, pointer, button);
       pointerCapturedByStage = false;
       return handled;
     } else {
       if (secondary != null && secondary.touchUp(screenX, screenY, pointer, button)) return true;
-      return stage.touchUp(screenX, screenY, pointer, button);
+      return uiEnabled.getAsBoolean() && stage.touchUp(screenX, screenY, pointer, button);
     }
   }
 
   @Override public boolean touchDragged(int screenX, int screenY, int pointer) {
-    if (pointerCapturedByStage) {
+    if (pointerCapturedByStage && uiEnabled.getAsBoolean()) {
       if (stage.touchDragged(screenX, screenY, pointer)) return true;
       return secondary != null && secondary.touchDragged(screenX, screenY, pointer);
     } else {
       if (secondary != null && secondary.touchDragged(screenX, screenY, pointer)) return true;
-      return stage.touchDragged(screenX, screenY, pointer);
+      return uiEnabled.getAsBoolean() && stage.touchDragged(screenX, screenY, pointer);
     }
   }
 
   @Override public boolean mouseMoved(int screenX, int screenY) {
     // Mouse move to both, UI first if over UI to keep hover effects snappy
     lastMouseX = screenX; lastMouseY = screenY;
+    if (!uiEnabled.getAsBoolean()) {
+      return secondary != null && secondary.mouseMoved(screenX, screenY);
+    }
     boolean overUI = isOverUI(screenX, screenY);
     if (overUI) {
       if (stage.mouseMoved(screenX, screenY)) return true;
@@ -122,6 +135,9 @@ public final class StageAwareInputRouter implements InputProcessor {
 
   @Override public boolean scrolled(float amountX, float amountY) {
     // Prefer Stage if cursor is over UI; otherwise route to secondary (camera/tools)
+    if (!uiEnabled.getAsBoolean()) {
+      return secondary != null && secondary.scrolled(amountX, amountY);
+    }
     boolean overUI = isOverUI(lastMouseX, lastMouseY);
     if (overUI) {
       if (stage.scrolled(amountX, amountY)) return true;
@@ -134,14 +150,14 @@ public final class StageAwareInputRouter implements InputProcessor {
 
   @Override public boolean touchCancelled(int screenX, int screenY, int pointer, int button) {
     // Mirror touchUp routing
-    if (pointerCapturedByStage) {
+    if (pointerCapturedByStage && uiEnabled.getAsBoolean()) {
       if (stage.touchCancelled(screenX, screenY, pointer, button)) { pointerCapturedByStage = false; return true; }
       boolean handled = secondary != null && secondary.touchCancelled(screenX, screenY, pointer, button);
       pointerCapturedByStage = false;
       return handled;
     } else {
       if (secondary != null && secondary.touchCancelled(screenX, screenY, pointer, button)) return true;
-      return stage.touchCancelled(screenX, screenY, pointer, button);
+      return uiEnabled.getAsBoolean() && stage.touchCancelled(screenX, screenY, pointer, button);
     }
   }
 }
