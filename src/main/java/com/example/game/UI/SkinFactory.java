@@ -1,5 +1,6 @@
 package com.example.game.UI;
 
+import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.Pixmap;
 import com.badlogic.gdx.graphics.Texture;
@@ -197,7 +198,11 @@ public class SkinFactory {
 
   public static ClickListener onClick(Runnable r) {
     return new ClickListener() {
-      @Override public void clicked(InputEvent event, float x, float y) { r.run(); }
+      @Override public void clicked(InputEvent event, float x, float y) {
+        Gdx.audio.newSound(Gdx.files.internal("assets/sounds/ui/buttons 5.mp3")).play();
+        r.run();
+      }
+      
     };
   }
 }
