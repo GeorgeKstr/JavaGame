@@ -55,6 +55,8 @@ public final class MountainTool implements Tool {
 
   public MountainTool(TerrainSystem terrain) {
     this.terrain = terrain;
+    // Stage latest mountains on chunk changes (so a following save writes them)
+    this.terrain.addChunksChangedListener(() -> { try { saveMountainsToMap(); } catch (Throwable ignored) {} });
   }
 
   // Supplier used by centralized processor installation (EditorScreen)
@@ -86,6 +88,10 @@ public final class MountainTool implements Tool {
     if (!postInstalled) {
       terrain.addChunkHeightPostProcessor(new TerrainSystem.MountainBakePostProcessor(() -> buildStampsFromNodes()));
       postInstalled = true;
+    }
+    // Load from map if present (only once on first selection)
+    if (nodes.isEmpty()) {
+      try { loadMountainsFromMap(); rebuildNodeList(); } catch (Throwable ignored) {}
     }
   }
 
@@ -153,6 +159,7 @@ public final class MountainTool implements Tool {
     deleteBtn = new TextButton("Delete Selected", skin);
     deleteBtn.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
       if (selected == null) return; int old = selectedIndex; nodes.remove(selected); selected = null; selectedIndex = Math.min(old, nodes.size()-1); if (selectedIndex >= 0) selected = nodes.get(selectedIndex); rebuildNodeList(); selLabel.setText(selected==null?"Selected: none":String.format("Selected: %s (%.1f, %.1f)",(selected.imageName==null?"-":selected.imageName), selected.center.x, selected.center.z));
+      saveMountainsToMap();
     }});
     container.add(deleteBtn).left().padTop(8).row();
 
@@ -166,6 +173,7 @@ public final class MountainTool implements Tool {
       n.intensity = 20f; n.edgeFalloff = 0.5f; n.halfW = 50f; n.halfH = 50f; n.rotationDeg = 0f;
       EditorContext.getFocusPosition(n.center);
       nodes.add(n); select(n); rebuildNodeList();
+      saveMountainsToMap();
     }});
 
 
@@ -335,7 +343,7 @@ public final class MountainTool implements Tool {
     }
   }
 
-  @Override public void onPointerUp(int button, boolean shift, boolean ctrl) { if (dragMode != DragMode.NONE) terrain.reloadAllChunks(); dragMode = DragMode.NONE; draggingNode = null; }
+  @Override public void onPointerUp(int button, boolean shift, boolean ctrl) { if (dragMode != DragMode.NONE) terrain.reloadAllChunks(); dragMode = DragMode.NONE; draggingNode = null; saveMountainsToMap(); }
 
   private Node pickNode(float x, float z){
     for (int i = nodes.size()-1; i>=0; i--) {
@@ -468,6 +476,85 @@ public final class MountainTool implements Tool {
     Gdx.gl.glDepthMask(true);
     Gdx.gl.glEnable(GL20.GL_CULL_FACE);
     Gdx.gl.glEnable(GL20.GL_DEPTH_TEST);
+  }
+
+  // ---------------- Persistence: serialize/deserialize mountains ----------------
+  private void saveMountainsToMap() {
+    if (terrain == null) return;
+    StringBuilder sb = new StringBuilder(1024);
+    sb.append('{').append("\"mountains\":[");
+    for (int i = 0; i < nodes.size(); i++) {
+      Node n = nodes.get(i);
+      if (i > 0) sb.append(',');
+      String imgPath = "mountains/images/mountain_" + i + ".png";
+      if (n.heightmap != null) {
+        try {
+          java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream(1<<16);
+          com.badlogic.gdx.graphics.PixmapIO.PNG encoder = new com.badlogic.gdx.graphics.PixmapIO.PNG();
+          encoder.setFlipY(false);
+          encoder.write(bos, n.heightmap);
+          encoder.dispose();
+          terrain.getMap().stageExtra(imgPath, bos.toByteArray());
+        } catch (Throwable ignored) {}
+      }
+      String nm = (n.imageName == null ? "" : n.imageName.replace("\"", "\\\""));
+      sb.append('{')
+        .append("\"image\":\"").append(imgPath).append('\"')
+        .append(",\"name\":\"").append(nm).append('\"')
+        .append(",\"cx\":").append(n.center.x)
+        .append(",\"cz\":").append(n.center.z)
+        .append(",\"halfW\":").append(n.halfW)
+        .append(",\"halfH\":").append(n.halfH)
+        .append(",\"rot\":").append(n.rotationDeg)
+        .append(",\"intensity\":").append(n.intensity)
+        .append(",\"falloff\":").append(n.edgeFalloff)
+        .append('}');
+    }
+    sb.append("]}");
+    byte[] bytes = sb.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    terrain.getMap().stageExtra("mountains/mountains.json", bytes);
+  }
+
+  private void loadMountainsFromMap() {
+    if (terrain == null) return;
+    byte[] data = terrain.getMap().readEntry("mountains/mountains.json");
+    if (data == null || data.length == 0) return;
+    String json = new String(data, java.nio.charset.StandardCharsets.UTF_8);
+    com.badlogic.gdx.utils.JsonValue root = new com.badlogic.gdx.utils.JsonReader().parse(json);
+    com.badlogic.gdx.utils.JsonValue arr = root.get("mountains");
+    if (arr == null) return;
+    nodes.clear();
+    for (com.badlogic.gdx.utils.JsonValue e : arr) {
+      String img = e.getString("image", null);
+      String name = e.getString("name", "");
+      float cx = e.getFloat("cx", 0f);
+      float cz = e.getFloat("cz", 0f);
+      float halfW = e.getFloat("halfW", 50f);
+      float halfH = e.getFloat("halfH", 50f);
+      float rot = e.getFloat("rot", 0f);
+      float intensity = e.getFloat("intensity", 20f);
+      float falloff = e.getFloat("falloff", 0.5f);
+      Pixmap pm = null;
+      if (img != null) {
+        byte[] ib = terrain.getMap().readEntry(img);
+        if (ib != null && ib.length > 0) pm = new Pixmap(ib, 0, ib.length);
+      }
+      Node n = new Node();
+      n.center.set(cx, 0f, cz);
+      n.halfW = halfW; n.halfH = halfH; n.rotationDeg = rot;
+      n.intensity = intensity; n.edgeFalloff = falloff;
+      n.heightmap = pm; n.preview = (pm != null ? new Texture(pm) : null);
+      n.imageName = name;
+      nodes.add(n);
+    }
+    if (!nodes.isEmpty()) select(nodes.get(0));
+  }
+
+  // Public helper: ensure nodes are loaded from the map once (for EditorScreen initial bake)
+  public void ensureLoadedFromMap() {
+    if (nodes.isEmpty()) {
+      try { loadMountainsFromMap(); rebuildNodeList(); } catch (Throwable ignored) {}
+    }
   }
 
   private static final class Node {

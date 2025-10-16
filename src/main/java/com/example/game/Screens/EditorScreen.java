@@ -423,6 +423,9 @@ public class EditorScreen implements Screen {
               () -> splinesLayerRef.getCatalogSnapshot(), 12));
     }
     if (terrainLayerRef != null) {
+      // Load mountains from map before installing processor so initial reload applies them
+      var mt = terrainLayerRef.getMountainTool();
+      if (mt != null) mt.ensureLoadedFromMap();
       terrain.addChunkHeightPostProcessor(
           new TerrainSystem.MountainBakePostProcessor(
               terrainLayerRef.getMountainTool().getStampsSupplier()));
