@@ -9,11 +9,13 @@ import com.example.game.World.Editor.Tools.Terrain.FlattenTool;
 import com.example.game.World.Editor.Tools.Terrain.PaintTextureTool;
 import com.example.game.World.Editor.Tools.Terrain.RaiseLowerTool;
 import com.example.game.World.Editor.Tools.Terrain.PolishTool;
+import com.example.game.World.Editor.Tools.Terrain.MountainTool;
 
 public final class TerrainLayer extends BaseToolLayer {
   private final TerrainSystem terrain;
   private final BrushSettings brush;     // the shared brush your tools already use
   private BrushOverlay overlay;
+  private MountainTool mountainTool;
 
   public TerrainLayer(TerrainSystem terrain, Skin skin) {
     super("terrain", "Terrain");
@@ -24,6 +26,8 @@ public final class TerrainLayer extends BaseToolLayer {
     addTool(new PaintTextureTool(terrain, brush));
     addTool(new PolishTool(terrain, brush));
     addTool(new FlattenTool(terrain, brush));
+    mountainTool = new MountainTool(terrain);
+    addTool(mountainTool);
   }
 
  // onActivate()
@@ -43,4 +47,5 @@ public final class TerrainLayer extends BaseToolLayer {
     }
 
     
+  public MountainTool getMountainTool() { return mountainTool; }
 }

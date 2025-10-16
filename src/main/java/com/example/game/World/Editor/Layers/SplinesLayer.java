@@ -40,16 +40,12 @@ public final class SplinesLayer extends BaseToolLayer {
     // Create tools bound to this layer
     addTool(new RoadTool(this, terrain));
     addTool(new RiverTool(this, terrain));
-    // Install non-destructive height modifier that reads current river splines
-    this.terrain.setHeightModifier(new com.example.game.World.Splines.SplineHeightModifier(this::getSplines));
+    // Remove live height modifier; bake processors now handle rivers/mountains to avoid double application
 
     // Load splines catalog from map (if present)
     try { loadSplinesFromMap(); } catch (Throwable ignored) {}
 
-    // Install live river baker so newly loaded chunks always bake using current catalog
-    terrain.installRiverBakeLive(() -> getCatalogSnapshot(), 12);
-    // Force a one-time reload so already-loaded chunks in view get baked immediately
-    terrain.reloadAllChunks();
+    // River bake is installed centrally in EditorScreen
 
     // Seed active list from full catalog so splines are visible immediately at startup
     synchronized (splines) {
@@ -60,19 +56,19 @@ public final class SplinesLayer extends BaseToolLayer {
 
     // When chunks change, rebuild ribbons and resync active set (additive listener)
     this.terrain.addChunksChangedListener(() -> {
-      // After chunks load/unload and baking applies, reproject nodes to baseline and rebuild ribbons
-      var hs = this.terrain.getBaseHeightSampler();
+      // After chunks load/unload and baking applies, reproject nodes to CURRENT heights (includes mountains/rivers)
+      var hs = this.terrain; // TerrainSystem implements HeightSampler using current heights
       for (TerrainSpline s : this.splines) {
         java.util.List<com.example.game.World.Splines.TerrainSplineNode> nodes = s.getNodes();
         for (int i = 0; i < nodes.size(); i++) {
           com.example.game.World.Splines.TerrainSplineNode n = nodes.get(i);
-          float ny = hs.heightAt(n.pos.x, n.pos.z, n.pos.y) + 0.05f;
+          float ny = hs.heightAt(n.pos.x, n.pos.z, n.pos.y) + 0.5f + s.riverDepth;
           if (Math.abs(ny - n.pos.y) > 1e-4f) {
             n.pos.y = ny;
           }
         }
         s.markRibbonDirty();
-        s.rebuildRibbonAsync(this.terrain.getBaseHeightSampler(), 2);
+        s.rebuildRibbonAsync(this.terrain, 2);
       }
       resyncActiveSplinesAsync();
       // Stage latest catalog so a subsequent save writes splines into the map

@@ -43,6 +43,7 @@ public class EditorScreen implements Screen {
   // UI
   private EditorHUD hud;
   private com.example.game.World.Editor.Layers.SplinesLayer splinesLayerRef;
+  private com.example.game.World.Editor.Layers.TerrainLayer terrainLayerRef;
 
   // rendering
   private RenderContext ctx;
@@ -365,7 +366,7 @@ public class EditorScreen implements Screen {
     // Apply initial render toggles
     terrain.setWireframe(Boolean.TRUE.equals(CVars.RENDER_TERRAIN_WIREFRAME.get()));
     terrain.setChunkGrid(Boolean.TRUE.equals(CVars.RENDER_TERRAIN_CHUNK_GRID.get()));
-    this.edCam.setHeightSampler(terrain.getBaseHeightSampler());
+    this.edCam.setHeightSampler(terrain);
     // Initial values from CVars (kept in sync with Settings)
     hour = CVars.RENDER_TIME_OF_DAY.get();
     updateSunFromHour();
@@ -408,10 +409,26 @@ public class EditorScreen implements Screen {
 
     // HUD
     hud = new EditorHUD();
-    layers.add(new TerrainLayer(terrain, hud.skin()));
+    terrainLayerRef = new TerrainLayer(terrain, hud.skin());
+    layers.add(terrainLayerRef);
     layers.add(new WalkLayer(terrain, hud.skin()));
     splinesLayerRef = new SplinesLayer(terrain, hud.skin());
     layers.add(splinesLayerRef);
+
+    // Centralized processor install: ensure deterministic order [mountains -> rivers]
+    terrain.setChunkHeightPostProcessor(null);
+    if (splinesLayerRef != null) {
+      terrain.addChunkHeightPostProcessor(
+          new TerrainSystem.RiverBakePostProcessor(
+              () -> splinesLayerRef.getCatalogSnapshot(), 12));
+    }
+    if (terrainLayerRef != null) {
+      terrain.addChunkHeightPostProcessor(
+          new TerrainSystem.MountainBakePostProcessor(
+              terrainLayerRef.getMountainTool().getStampsSupplier()));
+    }
+    // Initial apply so current view reflects processors
+    terrain.reloadAllChunks();
 
     hud.build(layers, new EditorHUD.Callbacks() {
       @Override public void onBack() { app.goToMenu(); }
@@ -557,13 +574,13 @@ public class EditorScreen implements Screen {
   }
 
   private void performRefresh() {
-    // Reload chunks to reapply live baking and current edits
+    // Reload chunks to reapply processors and current edits
     terrain.reloadAllChunks();
-    // Ensure ribbons reflect current terrain
+    // Ensure ribbons reflect current terrain (post-processed heights)
     if (splinesLayerRef != null) {
       for (var s : splinesLayerRef.getSplines()) {
         s.markRibbonDirty();
-        s.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 2);
+        s.rebuildRibbonAsync(terrain, 2);
       }
     }
 
@@ -621,6 +638,23 @@ public class EditorScreen implements Screen {
               for (var e : acc.entrySet()) { if (e.getValue() > bestW) { bestW = e.getValue(); bestId = e.getKey(); } }
               dominantTex = bestId;
             }
+
+            // Apply mountain deltas (meters) to corners so outer preview reflects mountains
+            if (terrainLayerRef != null) {
+              var mt = terrainLayerRef.getMountainTool();
+              if (mt != null) {
+                java.util.List<com.example.game.World.TerrainSystem.MountainStamp> stamps = mt.getStampsSupplier().get();
+                if (stamps != null && !stamps.isEmpty()) {
+                  // Corner world positions
+                  float x0 = cx * chunkSizeL, z0 = cz * chunkSizeL;
+                  float x1 = (cx + 1) * chunkSizeL, z1 = (cz + 1) * chunkSizeL;
+                  y00 += mountainDeltaAt(x0, z0, stamps);
+                  y10 += mountainDeltaAt(x1, z0, stamps);
+                  y01 += mountainDeltaAt(x0, z1, stamps);
+                  y11 += mountainDeltaAt(x1, z1, stamps);
+                }
+              }
+            }
             int key = (cx << 16) ^ (cz & 0xFFFF);
             chunkCornerHeights.put(key, new float[]{ y00, y10, y01, y11 });
             float[] rgb = textureAvgCache.computeIfAbsent(dominantTex, EditorScreen.this::computeTextureAverageColor);
@@ -630,6 +664,44 @@ public class EditorScreen implements Screen {
       } catch (Throwable ignored) {}
     });
   }
+
+  // Compute additive mountain delta (meters) at a world XZ by sampling current mountain stamps.
+  private static float mountainDeltaAt(float wx, float wz, java.util.List<com.example.game.World.TerrainSystem.MountainStamp> stamps) {
+    if (stamps == null || stamps.isEmpty()) return 0f;
+    float total = 0f;
+    for (com.example.game.World.TerrainSystem.MountainStamp s : stamps) {
+      if (s == null || s.heightmap == null) continue;
+      float cx = s.centerX, cz = s.centerZ;
+      float sin = (float)Math.sin(Math.toRadians(s.rotationDeg));
+      float cos = (float)Math.cos(Math.toRadians(s.rotationDeg));
+      float lx = wx - cx, lz = wz - cz;
+      float rx =  lx * cos + lz * sin;
+      float rz = -lx * sin + lz * cos;
+      float ax = Math.abs(rx) / Math.max(1e-6f, s.halfW);
+      float az = Math.abs(rz) / Math.max(1e-6f, s.halfH);
+      if (ax > 1f || az > 1f) continue;
+      float u = (rx * 0.5f / s.halfW) + 0.5f;
+      float v = (rz * 0.5f / s.halfH) + 0.5f;
+      int iw = s.heightmap.getWidth(), ih = s.heightmap.getHeight();
+      int iu = Math.min(iw - 1, Math.max(0, (int)(u * iw)));
+      int iv = Math.min(ih - 1, Math.max(0, (int)(v * ih)));
+      int rgba = s.heightmap.getPixel(iu, iv);
+      float r = ((rgba >>> 24) & 0xff) / 255f;
+      float g = ((rgba >>> 16) & 0xff) / 255f;
+      float b = ((rgba >>> 8)  & 0xff) / 255f;
+      float lum = (r + g + b) / 3f;
+      float edgeX = smoothstep01(1f - ax);
+      float edgeZ = smoothstep01(1f - az);
+      float edge = edgeX * edgeZ;
+      float shapedEdge = lerp(edge, (float)Math.pow(edge, 2.2f), clamp01(s.edgeFalloff));
+      total += s.intensity * 2f * lum * shapedEdge;
+    }
+    return total;
+  }
+
+  private static float clamp01(float v) { return v < 0f ? 0f : (v > 1f ? 1f : v); }
+  private static float smoothstep01(float x){ float t = clamp01(x); return t*t*(3f - 2f*t); }
+  private static float lerp(float a, float b, float t){ return a + (b - a) * t; }
 
   @Override public void resize(int w, int h) {
     cam.viewportWidth = w; cam.viewportHeight = h; cam.update();

@@ -65,7 +65,7 @@ public final class SplineRibbonRenderer implements Renderable {
       }
 
       if (s.isRibbonDirty() && !s.isRibbonRebuilding()) {
-        s.rebuildRibbonAsync(this.terrain.getBaseHeightSampler(), 2);
+        s.rebuildRibbonAsync(this.terrain, 2);
       }
       if (!s.hasRibbon()) continue;
 
@@ -84,7 +84,12 @@ public final class SplineRibbonRenderer implements Renderable {
     float[] sunTint = computeSunTint(); float rr = sunTint[0], gg = sunTint[1], bb = sunTint[2];
     float[] lx = s.getLX(), ly = s.getLY(), lz = s.getLZ();
     float[] rx = s.getRX(), ry = s.getRY(), rz = s.getRZ();
-    int n = s.getTriPairs() + 1;
+    if (lx == null || ly == null || lz == null || rx == null || ry == null || rz == null) return;
+    int nFromTri = s.getTriPairs() + 1;
+    int len = Math.min(Math.min(lx.length, rx.length), Math.min(ly.length, ry.length));
+    len = Math.min(len, Math.min(lz.length, rz.length));
+    int n = Math.min(nFromTri, len);
+    if (n < 2) return;
     float yLift = s.heightOffset + 0.02f;
     float ratio = Math.max(0.01f, s.ribbonWidthRatio);
 

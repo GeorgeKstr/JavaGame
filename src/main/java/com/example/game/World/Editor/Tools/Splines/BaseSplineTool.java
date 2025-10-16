@@ -33,7 +33,7 @@ public abstract class BaseSplineTool implements Tool {
     if (button == com.badlogic.gdx.Input.Buttons.LEFT) {
       if (ctrl) {
         Ray ray = EditorContext.getCamera().getPickRay(Gdx.input.getX(), Gdx.input.getY());
-        Vector3 world = terrain.getPicker().rayIntersectTerrain(ray, terrain.getBaseHeightSampler());
+        Vector3 world = terrain.getPicker().rayIntersectTerrain(ray, terrain);
         handleCtrlInsert(world);
         return;
       }
@@ -72,11 +72,12 @@ public abstract class BaseSplineTool implements Tool {
     int sy = Gdx.input.getY();
     com.badlogic.gdx.math.collision.Ray ray = cam.getPickRay(sx, sy);
     var picker = terrain.getPicker();
-    Vector3 hit = picker.rayIntersectTerrain(ray, terrain.getBaseHeightSampler());
+    Vector3 hit = picker.rayIntersectTerrain(ray, terrain);
     if (hit == null) return;
-    sel.setNodePos(idx, new Vector3(hit.x, hit.y + 0.05f, hit.z));
+    float hoff = sel.heightOffset;
+    sel.setNodePos(idx, new Vector3(hit.x, hit.y + hoff + 0.05f, hit.z));
     sel.markRibbonDirty();
-    sel.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 2);
+    sel.rebuildRibbonAsync(terrain, 2);
     onSelectionChangedUI(sel, idx);
   }
 
@@ -85,7 +86,7 @@ public abstract class BaseSplineTool implements Tool {
       TerrainSpline sel = layer.getSelectedSpline();
       if (sel != null && sel.getType() == handledType()) {
         sel.markRibbonDirty();
-        sel.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 2);
+        sel.rebuildRibbonAsync(terrain, 2);
       }
       terrain.reloadAllChunks();
     }
@@ -95,15 +96,16 @@ public abstract class BaseSplineTool implements Tool {
   // -------- helpers shared by spline tools --------
   protected void handleCtrlInsert(Vector3 world) {
     TerrainSpline spline = layer.getSelectedSpline();
-    float baseY = terrain.getBaseHeightSampler().heightAt(world.x, world.z, world.y);
-    float y = baseY + 0.05f;
+    float baseY = terrain.heightAt(world.x, world.z, world.y);
+    float off = (spline != null ? spline.heightOffset : 0f);
+    float y = baseY + off + 0.05f;
     if (spline == null || spline.getType() != handledType() || layer.getSelectedNode() < 0) {
       if (spline == null) spline = layer.createSpline(handledType());
       spline.addNode(new TerrainSplineNode(world.x, y, world.z));
       layer.select(spline, spline.size()-1);
       EditorContext.setSelectedPlaceable(spline);
       spline.markRibbonDirty();
-      spline.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 2);
+      spline.rebuildRibbonAsync(terrain, 2);
       onSelectionChangedUI(spline, spline.size()-1);
       return;
     }
@@ -136,7 +138,7 @@ public abstract class BaseSplineTool implements Tool {
     layer.select(spline, insertAt);
     EditorContext.setSelectedPlaceable(spline);
     spline.markRibbonDirty();
-    spline.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 2);
+    spline.rebuildRibbonAsync(terrain, 2);
     terrain.reloadAllChunks();
     onSelectionChangedUI(spline, insertAt);
   }

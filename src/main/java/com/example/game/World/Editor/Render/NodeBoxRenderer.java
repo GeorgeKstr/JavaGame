@@ -48,9 +48,8 @@ public final class NodeBoxRenderer implements Renderable {
 
       for (int k = 0; k < nodes.size(); k++) {
         Vector3 p = nodes.get(k).pos;
-        float baseY = terrain.getBaseHeightSampler().heightAt(p.x, p.z, p.y);
-        float y0 = baseY - halfYBelow;
-        float y1 = baseY + halfYAbove;
+        float y0 = p.y - halfYBelow;
+        float y1 = p.y + halfYAbove;
         float x0 = p.x - halfXZ, x1 = p.x + halfXZ;
         float z0 = p.z - halfXZ, z1 = p.z + halfXZ;
 

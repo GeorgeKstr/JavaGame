@@ -37,7 +37,7 @@ public final class RiverTool extends BaseSplineTool {
     // Auto-resample ribbons whenever chunks load/unload so ribbons follow terrain without nudging
     this.terrain.onChunksChanged(() -> {
       java.util.List<TerrainSpline> list = this.layer.getSplines();
-      for (TerrainSpline s : list) { s.markRibbonDirty(); s.rebuildRibbonAsync(this.terrain.getBaseHeightSampler(), 8); }
+      for (TerrainSpline s : list) { s.markRibbonDirty(); s.rebuildRibbonAsync(this.terrain, 8); }
     });
   }
 
@@ -60,7 +60,7 @@ public final class RiverTool extends BaseSplineTool {
     widthSlider = new Slider(1f, 50f, 0.5f, false, skin);
     if (sel != null) widthSlider.setValue(sel.width);
     widthSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
-      TerrainSpline s = layer.getSelectedSpline(); if (s==null) return; s.width = widthSlider.getValue(); s.markRibbonDirty(); s.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 2); widthLabel.setText(String.format("Width: %.1f m", s.width)); layer.saveSplinesToMap(); }});
+      TerrainSpline s = layer.getSelectedSpline(); if (s==null) return; s.width = widthSlider.getValue(); s.markRibbonDirty(); s.rebuildRibbonAsync(terrain, 2); widthLabel.setText(String.format("Width: %.1f m", s.width)); layer.saveSplinesToMap(); }});
     wtbl.add(widthLabel).left().row();
     wtbl.add(widthSlider).width(240).row();
     container.add(wtbl).left().padBottom(8).row();
@@ -70,7 +70,7 @@ public final class RiverTool extends BaseSplineTool {
     depthSlider = new Slider(0f, 20f, 0.1f, false, skin);
     if (sel != null) depthSlider.setValue(sel.riverDepth);
     depthSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
-      TerrainSpline s = layer.getSelectedSpline(); if (s==null || s.getType()!=TerrainSpline.Type.RIVER) return; s.riverDepth = depthSlider.getValue(); s.markRibbonDirty(); s.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 2); depthLabel.setText(String.format("Depth: %.1f m", s.riverDepth)); layer.saveSplinesToMap(); }});
+      TerrainSpline s = layer.getSelectedSpline(); if (s==null || s.getType()!=TerrainSpline.Type.RIVER) return; s.riverDepth = depthSlider.getValue(); s.markRibbonDirty(); s.rebuildRibbonAsync(terrain, 2); depthLabel.setText(String.format("Depth: %.1f m", s.riverDepth)); layer.saveSplinesToMap(); }});
     dt.add(depthLabel).left().row();
     dt.add(depthSlider).width(240).row();
     container.add(dt).left().padBottom(8).row();
@@ -81,7 +81,7 @@ public final class RiverTool extends BaseSplineTool {
     steepSlider = new Slider(0f, 1f, 0.01f, false, skin);
     if (sel != null) steepSlider.setValue(sel.bankFalloff);
     steepSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
-      TerrainSpline s = layer.getSelectedSpline(); if (s==null || s.getType()!=TerrainSpline.Type.RIVER) return; s.bankFalloff = steepSlider.getValue(); s.markRibbonDirty(); s.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 2); steepLabel.setText(String.format("Steepness: %.2f", s.bankFalloff)); layer.saveSplinesToMap(); }});
+      TerrainSpline s = layer.getSelectedSpline(); if (s==null || s.getType()!=TerrainSpline.Type.RIVER) return; s.bankFalloff = steepSlider.getValue(); s.markRibbonDirty(); s.rebuildRibbonAsync(terrain, 2); steepLabel.setText(String.format("Steepness: %.2f", s.bankFalloff)); layer.saveSplinesToMap(); }});
     st.add(steepLabel).left().row();
     st.add(steepSlider).width(240).row();
     container.add(st).left().padBottom(8).row();
@@ -157,7 +157,7 @@ public final class RiverTool extends BaseSplineTool {
       int newSel = Math.min(idx, cur.size()-1);
       layer.select(cur, newSel);
       if (nodeList != null) { nodeList.setItems(buildNodeLabels(cur)); if (newSel >= 0) nodeList.setSelectedIndex(newSel); }
-      cur.markRibbonDirty(); cur.rebuildRibbonAsync(terrain.getBaseHeightSampler(), 2);
+      cur.markRibbonDirty(); cur.rebuildRibbonAsync(terrain, 2);
       terrain.reloadAllChunks();
     }});
     lt.add(del).left().padTop(6);
