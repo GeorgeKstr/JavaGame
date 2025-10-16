@@ -13,6 +13,7 @@ public final class EditorContext {
   private static volatile Camera camera;   // set once on Screen.show(), updated by EditorCamera
   private static volatile com.example.game.World.Placeable selectedPlaceable; // currently selected placeable (optional)
   private static final Vector3 focusPos = new Vector3(); // camera pivot (rotation axis)
+  private static volatile java.util.function.Consumer<String> refreshRunner; // set by EditorScreen
 
   private EditorContext() {}
 
@@ -66,6 +67,17 @@ public final class EditorContext {
   public static Vector3 getFocusPosition(Vector3 out) {
     if (out == null) return null;
     return out.set(focusPos);
+  }
+
+  // -------------------
+  // Centralized refresh requests (overlay + reload)
+  // -------------------
+  /** Called by EditorScreen to install a refresh runner. Runs on the render thread. */
+  public static void setRefreshRunner(java.util.function.Consumer<String> runner) { refreshRunner = runner; }
+  /** Request a streaming refresh with a label (may be null). Safe to call from tools. */
+  public static void requestRefresh(String label) {
+    java.util.function.Consumer<String> r = refreshRunner;
+    if (r != null) r.accept(label);
   }
 
   // -------------------

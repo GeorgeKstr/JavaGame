@@ -43,6 +43,117 @@ public class TerrainSystem implements HeightSampler {
     this.picking  = new TerrainPicking(world);
   }
 
+  // ---------------- Async in-place reload support ----------------
+  private static final class ReloadResult {
+    final int key; final int cx; final int cz; final boolean defaultFlat;
+    final short[] heights; final short[] baseHeights;
+    final byte[] id0, id1, id2, w0, w1, w2;
+    ReloadResult(int key, int cx, int cz, boolean df, short[] h, short[] base, byte[] id0, byte[] id1, byte[] id2, byte[] w0, byte[] w1, byte[] w2) {
+      this.key=key; this.cx=cx; this.cz=cz; this.defaultFlat=df; this.heights=h; this.baseHeights=base; this.id0=id0; this.id1=id1; this.id2=id2; this.w0=w0; this.w1=w1; this.w2=w2;
+    }
+  }
+  private final java.util.concurrent.ConcurrentLinkedQueue<ReloadResult> reloadQueue = new java.util.concurrent.ConcurrentLinkedQueue<>();
+  private final java.util.concurrent.atomic.AtomicInteger reloadSubmitted = new java.util.concurrent.atomic.AtomicInteger(0);
+  private final java.util.concurrent.atomic.AtomicInteger reloadApplied = new java.util.concurrent.atomic.AtomicInteger(0);
+
+  /** Kick off background loads for all loaded chunks; call applyPendingReloads() on render thread to apply. */
+  public void reloadAllChunksAsyncInPlace() {
+    final int S = world.S;
+    final float tile = world.tile;
+    final float chunkWorldSize = (S - 1) * tile;
+    reloadSubmitted.set(0); reloadApplied.set(0);
+    // Submit a task per loaded chunk
+    for (com.badlogic.gdx.utils.IntMap.Entry<TerrainChunk> e : world.chunks) {
+      TerrainChunk c = e.value; if (c == null) continue;
+      int cx = (int)Math.floor(c.getOriginX() / chunkWorldSize);
+      int cz = (int)Math.floor(c.getOriginZ() / chunkWorldSize);
+      int key = e.key;
+      reloadSubmitted.incrementAndGet();
+      world.pool.submit(() -> {
+        try {
+          byte[] hmx = world.map.readChunkHmx(cx, cz);
+          final int samples = S * S;
+          boolean defaultFlat = false;
+          short[] h; byte[] id0, id1, id2, w0, w1, w2; short[] baseH;
+          if (hmx == null) {
+            defaultFlat = true;
+            h = new short[samples];
+            id0 = new byte[samples]; id1 = new byte[samples]; id2 = new byte[samples];
+            w0  = new byte[samples]; w1  = new byte[samples]; w2  = new byte[samples];
+            byte defId = (byte)(world.map.getManifest().defaultTexture & 0xFF);
+            java.util.Arrays.fill(id0, defId);
+            java.util.Arrays.fill(w0, (byte)255);
+            baseH = java.util.Arrays.copyOf(h, h.length);
+          } else {
+            var lc = world.provider.loadFromBytes(hmx);
+            if (lc instanceof SparseChunkProvider.LoadedChunk) {
+              h   = ((SparseChunkProvider.LoadedChunk) lc).heights;
+              id0 = ((SparseChunkProvider.LoadedChunk) lc).id0;
+              id1 = ((SparseChunkProvider.LoadedChunk) lc).id1;
+              id2 = ((SparseChunkProvider.LoadedChunk) lc).id2;
+              w0  = ((SparseChunkProvider.LoadedChunk) lc).w0;
+              w1  = ((SparseChunkProvider.LoadedChunk) lc).w1;
+              w2  = ((SparseChunkProvider.LoadedChunk) lc).w2;
+            } else {
+              h = lc.heights;
+              byte[] texIds = (byte[])reflectGet(lc, "texIds");
+              id0 = new byte[samples]; id1 = new byte[samples]; id2 = new byte[samples];
+              w0  = new byte[samples]; w1  = new byte[samples]; w2  = new byte[samples];
+              System.arraycopy(texIds, 0, id0, 0, samples);
+              java.util.Arrays.fill(w0, (byte)255);
+            }
+            baseH = java.util.Arrays.copyOf(h, h.length);
+          }
+          // Optional post-process in background (thread-safe implementations only)
+          if (world.chunkPost != null) {
+            float ox = cx * chunkWorldSize, oz = cz * chunkWorldSize;
+            try { world.chunkPost.processChunk(cx, cz, ox, oz, h, baseH, S, tile, world.yScale); } catch (Throwable ignored) {}
+          }
+          reloadQueue.add(new ReloadResult(key, cx, cz, defaultFlat, h, baseH, id0, id1, id2, w0, w1, w2));
+        } catch (Throwable t) {
+          // Skip on error; still count as applied to not stall
+          reloadApplied.incrementAndGet();
+        }
+      });
+    }
+  }
+
+  /** Apply up to maxPerFrame pending reloads to existing chunks (render thread). Returns applied count. */
+  public int applyPendingReloads(int maxPerFrame) {
+    int applied = 0;
+    final int S = world.S;
+    while (applied < Math.max(1, maxPerFrame)) {
+      ReloadResult r = reloadQueue.poll();
+      if (r == null) break;
+      TerrainChunk c = world.chunks.get(r.key);
+      if (c != null) {
+        // Copy arrays into existing chunk
+        short[] ch = c.getHeightsArray(); if (ch != null && ch.length == r.heights.length) { System.arraycopy(r.heights, 0, ch, 0, ch.length); c.setDirty(true);} else { c.setHeights(r.heights); }
+        byte[] a0 = c.getTexId0Array();  if (a0 != null && a0.length == r.id0.length) { System.arraycopy(r.id0, 0, a0, 0, a0.length); c.setDirty(true);} else { c.setTexIds(r.id0); }
+        byte[] a1 = c.getTexId1Array();  if (a1 != null && a1.length == r.id1.length) { System.arraycopy(r.id1, 0, a1, 0, a1.length); c.setDirty(true);} else { c.setTexId1Array(r.id1); }
+        byte[] a2 = c.getTexId2Array();  if (a2 != null && a2.length == r.id2.length) { System.arraycopy(r.id2, 0, a2, 0, a2.length); c.setDirty(true);} else { c.setTexId2Array(r.id2); }
+        byte[] wA = c.getTexW0Array();   if (wA != null && wA.length == r.w0.length) { System.arraycopy(r.w0, 0, wA, 0, wA.length); c.setDirty(true);} else { c.setTexW0Array(r.w0); }
+        byte[] wB = c.getTexW1Array();   if (wB != null && wB.length == r.w1.length) { System.arraycopy(r.w1, 0, wB, 0, wB.length); c.setDirty(true);} else { c.setTexW1Array(r.w1); }
+        byte[] wC = c.getTexW2Array();   if (wC != null && wC.length == r.w2.length) { System.arraycopy(r.w2, 0, wC, 0, wC.length); c.setDirty(true);} else { c.setTexW2Array(r.w2); }
+        c.setBaselineHeights(r.baseHeights);
+        c.buildLods(world.MAX_LOD);
+        if (r.defaultFlat) world.defaultFlatChunks.add(r.key); else world.defaultFlatChunks.remove(r.key);
+      }
+      applied++;
+      reloadApplied.incrementAndGet();
+    }
+    // Notify listeners if we applied any this frame
+    if (applied > 0 && world.onChunksChanged != null) try { world.onChunksChanged.run(); } catch (Throwable ignored) {}
+    return applied;
+  }
+
+  /** Optional: expose approximate progress 0..1 for UI during async reload. */
+  public float getReloadProgress01() {
+    int sub = Math.max(1, reloadSubmitted.get());
+    int app = Math.min(sub, reloadApplied.get());
+    return app / (float)sub;
+  }
+
   // ---------------- Non-destructive height modifiers (stacking) ----------------
   /** Height modifier that samples MountainStamp supplier (live) and returns additive delta. */
   public static class MountainHeightModifier implements HeightModifier {
@@ -391,11 +502,105 @@ public class TerrainSystem implements HeightSampler {
 
   /** Convenience: unload all current chunks; streamer will reload on next update. */
   public void reloadAllChunks() {
-    // Dispose loaded chunks and clear bookkeeping; next updateAndStream will repopulate
-    for (com.badlogic.gdx.utils.IntMap.Entry<TerrainChunk> e : world.chunks) e.value.dispose();
-    world.chunks.clear();
-    world.defaultFlatChunks.clear();
-    world.pending.clear();
+    // Reload heights/textures for all currently loaded chunks IN-PLACE to avoid GC
+    // Assumes render thread (no GL calls besides mesh rebuilds below)
+    final int S = world.S;
+    final float tile = world.tile;
+    final float chunkWorldSize = (S - 1) * tile;
+
+    for (com.badlogic.gdx.utils.IntMap.Entry<TerrainChunk> e : world.chunks) {
+      TerrainChunk c = e.value;
+      if (c == null) continue;
+      int cx = (int)Math.floor(c.getOriginX() / chunkWorldSize);
+      int cz = (int)Math.floor(c.getOriginZ() / chunkWorldSize);
+
+      byte[] hmx = world.map.readChunkHmx(cx, cz);
+      final int samples = S * S;
+
+      boolean defaultFlat = false;
+      short[] h;
+      byte[] id0, id1, id2, w0, w1, w2;
+      short[] baseH;
+
+      if (hmx == null) {
+        // Default flat chunk
+        defaultFlat = true;
+        h = new short[samples];
+        id0 = new byte[samples]; id1 = new byte[samples]; id2 = new byte[samples];
+        w0  = new byte[samples]; w1  = new byte[samples]; w2  = new byte[samples];
+        byte defId = (byte)(world.map.getManifest().defaultTexture & 0xFF);
+        java.util.Arrays.fill(id0, defId);
+        java.util.Arrays.fill(w0, (byte)255);
+        baseH = java.util.Arrays.copyOf(h, h.length);
+      } else {
+        var lc = world.provider.loadFromBytes(hmx);
+        if (lc instanceof SparseChunkProvider.LoadedChunk) {
+          h   = ((SparseChunkProvider.LoadedChunk) lc).heights;
+          id0 = ((SparseChunkProvider.LoadedChunk) lc).id0;
+          id1 = ((SparseChunkProvider.LoadedChunk) lc).id1;
+          id2 = ((SparseChunkProvider.LoadedChunk) lc).id2;
+          w0  = ((SparseChunkProvider.LoadedChunk) lc).w0;
+          w1  = ((SparseChunkProvider.LoadedChunk) lc).w1;
+          w2  = ((SparseChunkProvider.LoadedChunk) lc).w2;
+        } else {
+          // Legacy fallback: texIds only
+          h = lc.heights;
+          byte[] texIds = (byte[])reflectGet(lc, "texIds");
+          id0 = new byte[samples]; id1 = new byte[samples]; id2 = new byte[samples];
+          w0  = new byte[samples]; w1  = new byte[samples]; w2  = new byte[samples];
+          System.arraycopy(texIds, 0, id0, 0, samples);
+          java.util.Arrays.fill(w0, (byte)255);
+        }
+        baseH = java.util.Arrays.copyOf(h, h.length);
+      }
+
+      // Optional background-like post-process executed synchronously here
+      if (world.chunkPost != null) {
+        float ox = cx * chunkWorldSize;
+        float oz = cz * chunkWorldSize;
+        try { world.chunkPost.processChunk(cx, cz, ox, oz, h, baseH, S, tile, world.yScale); } catch (Throwable ignored) {}
+      }
+
+      // Update existing arrays in-place to avoid allocating new TerrainChunk objects
+      short[] ch = c.getHeightsArray();
+      if (ch != null && ch.length == h.length) {
+        System.arraycopy(h, 0, ch, 0, h.length);
+        c.setDirty(true);
+      } else {
+        c.setHeights(h); // fallback if sizes differ
+      }
+
+      byte[] a0 = c.getTexId0Array();
+      if (a0 != null && a0.length == id0.length) System.arraycopy(id0, 0, a0, 0, id0.length); else c.setTexIds(id0);
+      byte[] a1 = c.getTexId1Array(); if (a1 != null && a1.length == id1.length) { System.arraycopy(id1, 0, a1, 0, id1.length); c.setDirty(true);} else c.setTexId1Array(id1);
+      byte[] a2 = c.getTexId2Array(); if (a2 != null && a2.length == id2.length) { System.arraycopy(id2, 0, a2, 0, id2.length); c.setDirty(true);} else c.setTexId2Array(id2);
+      byte[] wA = c.getTexW0Array();  if (wA != null && wA.length == w0.length) { System.arraycopy(w0, 0, wA, 0, w0.length); c.setDirty(true);} else c.setTexW0Array(w0);
+      byte[] wB = c.getTexW1Array();  if (wB != null && wB.length == w1.length) { System.arraycopy(w1, 0, wB, 0, w1.length); c.setDirty(true);} else c.setTexW1Array(w1);
+      byte[] wC = c.getTexW2Array();  if (wC != null && wC.length == w2.length) { System.arraycopy(w2, 0, wC, 0, w2.length); c.setDirty(true);} else c.setTexW2Array(w2);
+
+      // Baseline for ribbons/tools
+      c.setBaselineHeights(baseH);
+
+      // Rebuild LODs for updated arrays
+      c.buildLods(world.MAX_LOD);
+
+      // Track default flat membership
+      if (defaultFlat) world.defaultFlatChunks.add(e.key); else world.defaultFlatChunks.remove(e.key);
+    }
+
+    // Notify listeners once after bulk reload
+    if (world.onChunksChanged != null) try { world.onChunksChanged.run(); } catch (Throwable ignored) {}
+  }
+
+  // Small local helper to access legacy provider fields without depending on TerrainStreamer internals
+  private static Object reflectGet(Object o, String field) {
+    try {
+      java.lang.reflect.Field f = o.getClass().getDeclaredField(field);
+      f.setAccessible(true);
+      return f.get(o);
+    } catch (Throwable t) {
+      return null;
+    }
   }
 
   /** Desktop file chooser that imports a texture into a specific subfolder under textures/ground/. */

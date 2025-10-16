@@ -304,7 +304,7 @@ public final class MountainTool implements Tool {
 
     // Inverted checkbox
     invertedCheck = new com.badlogic.gdx.scenes.scene2d.ui.CheckBox(" Inverted (depth)", skin);
-    invertedCheck.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ if (updatingUI || selected == null) return; selected.inverted = invertedCheck.isChecked(); terrain.reloadAllChunks(); saveMountainsToMap(); }});
+    invertedCheck.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ if (updatingUI || selected == null) return; selected.inverted = invertedCheck.isChecked(); com.example.game.World.Editor.EditorContext.requestRefresh("Updating mountains..."); saveMountainsToMap(); }});
     t.add(invertedCheck).left().padTop(6).row();
 
     scaleXLabel = new Label("Half-width X: -", skin); scaleXSlider = new Slider(5f, 1500f, 1f, false, skin);
@@ -514,7 +514,7 @@ public final class MountainTool implements Tool {
     }
   }
 
-  @Override public void onPointerUp(int button, boolean shift, boolean ctrl) { if (dragMode != DragMode.NONE) terrain.reloadAllChunks(); dragMode = DragMode.NONE; draggingNode = null; saveMountainsToMap(); }
+  @Override public void onPointerUp(int button, boolean shift, boolean ctrl) { if (dragMode != DragMode.NONE) com.example.game.World.Editor.EditorContext.requestRefresh("Updating mountains..."); dragMode = DragMode.NONE; draggingNode = null; Gdx.app.postRunnable(this::saveMountainsToMap); }
 
   private Node pickNode(float x, float z){
     for (int i = nodes.size()-1; i>=0; i--) {

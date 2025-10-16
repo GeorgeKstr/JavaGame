@@ -131,12 +131,19 @@ public final class EditorCamera {
       ).nor();
       // Ray points from pivot to camera direction (backwards along forward)
       Vector3 dirToCam = new Vector3(fwd).scl(-1f).nor();
-      com.badlogic.gdx.math.collision.Ray ray = new com.badlogic.gdx.math.collision.Ray(new Vector3(pivot), dirToCam);
+      // Nudge origin slightly along ray to avoid immediate self-hit at the pivot plane
+      Vector3 origin = new Vector3(pivot).mulAdd(dirToCam, 0.05f);
+      com.badlogic.gdx.math.collision.Ray ray = new com.badlogic.gdx.math.collision.Ray(origin, dirToCam);
       Vector3 hit = terrainRef.getPicker().rayIntersectTerrain(ray, terrainRef);
       if (hit != null) {
         float clearance = 1.0f; // meters to keep from terrain
-        float maxDist = hit.dst(pivot) - clearance;
-        if (maxDist < desired) desired = Math.max(1.0f, maxDist);
+        float hitDist = hit.dst(pivot);
+        // Only clamp if the hit is clearly farther than our current camera distance (avoid self-hit)
+        float eps = 0.25f;
+        if (hitDist > distance + eps) {
+          float maxDist = Math.max(1.0f, hitDist - clearance);
+          if (maxDist < desired) desired = maxDist;
+        }
       }
     }
 

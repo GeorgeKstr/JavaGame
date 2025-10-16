@@ -48,6 +48,14 @@ public class EditorScreen implements Screen {
   private com.example.game.World.Editor.Layers.SplinesLayer splinesLayerRef;
   private com.example.game.World.Editor.Layers.TerrainLayer terrainLayerRef;
 
+  // Loading overlay (non-blocking)
+  private com.badlogic.gdx.scenes.scene2d.ui.Table loadingOverlay;
+  private com.badlogic.gdx.scenes.scene2d.ui.Label loadingLabel;
+  private com.badlogic.gdx.scenes.scene2d.ui.ProgressBar loadingBar;
+  private int loadingStableFrames = 0;
+  private int loadingLastCount = -1;
+  private boolean loadingVisible = false;
+
   // rendering
   private RenderContext ctx;
   private RenderPipeline pipeline;
@@ -74,6 +82,89 @@ public class EditorScreen implements Screen {
   public EditorScreen(GameApp app, String mapPath, Settings settings) {
     this.app = app; this.mapPath = mapPath; this.settings = settings;
     this.edCam = new EditorCamera(settings);
+  }
+
+  // ------------------------------------------------------------
+  // Loading overlay helpers
+  // ------------------------------------------------------------
+  private void initLoadingOverlay() {
+    if (hud == null) return;
+    var skin = hud.skin();
+    loadingOverlay = new com.badlogic.gdx.scenes.scene2d.ui.Table(skin);
+    loadingOverlay.setFillParent(true);
+    // Do not intercept input while visible to avoid blocking tools
+    loadingOverlay.setTouchable(com.badlogic.gdx.scenes.scene2d.Touchable.disabled);
+    loadingLabel = new com.badlogic.gdx.scenes.scene2d.ui.Label("Loading...", skin, "title");
+    // Try skin style; if missing, build a minimal fallback style at runtime
+    com.badlogic.gdx.scenes.scene2d.ui.ProgressBar.ProgressBarStyle pbs;
+    try {
+      pbs = skin.get(com.badlogic.gdx.scenes.scene2d.ui.ProgressBar.ProgressBarStyle.class);
+    } catch (Throwable ignored) {
+      // Fallback: build simple drawables
+      com.badlogic.gdx.graphics.Pixmap bgPm = new com.badlogic.gdx.graphics.Pixmap(4, 8, com.badlogic.gdx.graphics.Pixmap.Format.RGBA8888);
+      bgPm.setColor(0f, 0f, 0f, 0.35f); bgPm.fill();
+      com.badlogic.gdx.graphics.Pixmap fillPm = new com.badlogic.gdx.graphics.Pixmap(4, 8, com.badlogic.gdx.graphics.Pixmap.Format.RGBA8888);
+      fillPm.setColor(0.1f, 0.7f, 1f, 0.9f); fillPm.fill();
+      com.badlogic.gdx.graphics.Texture bgTex = new com.badlogic.gdx.graphics.Texture(bgPm);
+      com.badlogic.gdx.graphics.Texture fillTex = new com.badlogic.gdx.graphics.Texture(fillPm);
+      bgPm.dispose(); fillPm.dispose();
+      com.badlogic.gdx.scenes.scene2d.utils.Drawable background = new com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable(new com.badlogic.gdx.graphics.g2d.TextureRegion(bgTex));
+      com.badlogic.gdx.scenes.scene2d.utils.Drawable knobBefore = new com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable(new com.badlogic.gdx.graphics.g2d.TextureRegion(fillTex));
+      pbs = new com.badlogic.gdx.scenes.scene2d.ui.ProgressBar.ProgressBarStyle();
+      pbs.background = background; pbs.knobBefore = knobBefore;
+      pbs.knob = knobBefore;
+    }
+    loadingBar = new com.badlogic.gdx.scenes.scene2d.ui.ProgressBar(0f, 1f, 0.001f, false, pbs);
+    loadingBar.setAnimateDuration(0.15f);
+    loadingOverlay.add(loadingLabel).padBottom(12).row();
+    loadingOverlay.add(loadingBar).width(320).row();
+    loadingOverlay.setVisible(false);
+    hud.stage().addActor(loadingOverlay);
+  }
+  
+  private void showLoading(String text) {
+    if (loadingOverlay == null) return;
+    loadingLabel.setText(text == null ? "Loading..." : text);
+    loadingBar.setValue(0f);
+    loadingVisible = true;
+    loadingStableFrames = 0;
+    loadingLastCount = -1;
+    loadingOverlay.setVisible(true);
+  }
+
+  private void hideLoading() {
+    if (loadingOverlay == null) return;
+    loadingVisible = false;
+    loadingOverlay.setVisible(false);
+  }
+
+  // Called from render loop to keep UI responsive; also usable from listeners
+  private void tickLoading() {
+    if (!loadingVisible || terrain == null) return;
+    // Approximate target chunk count by view radius
+    int vr = CVars.VIEW_RADIUS_CHUNKS.get();
+    int target = Math.max(1, (2*vr + 1) * (2*vr + 1));
+    int loaded = terrain.getLoadedChunkKeysCopy().size();
+    float p = Math.min(1f, loaded / (float)target);
+    loadingBar.setValue(p);
+    if (loaded == loadingLastCount) {
+      loadingStableFrames++;
+    } else {
+      loadingStableFrames = 0;
+    }
+    loadingLastCount = loaded;
+    // Consider loading done after some stability frames
+    if (loadingStableFrames > 15 || p >= 0.999f) {
+      hideLoading();
+    }
+  }
+
+  // Called on render thread via postRunnable when chunks change
+  private void onChunksChanged() {
+    if (!loadingVisible) return;
+    // Nudge progress; reset stability so we require a few quiet frames before hiding
+    loadingStableFrames = 0;
+    tickLoading();
   }
 
   private void drawCrosshair() {
@@ -379,19 +470,24 @@ public class EditorScreen implements Screen {
   }
 
   @Override public void show() {
+    hud = new EditorHUD();
+    initLoadingOverlay();
     // Camera
     cam = new PerspectiveCamera(70f, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
     cam.near = 0.05f; cam.far = 8000f; cam.update();
     EditorContext.setCamera(cam);
-
     // World
     ensureMapExists(mapPath);
     map = MapResource.loadFromFile(mapPath);
+    // Show overlay immediately; defer heavy world init to next frame so overlay can draw first
+    showLoading("Initializing terrain...");
+    Gdx.app.postRunnable(() -> {
     terrain = new TerrainSystem(map);
     // Apply initial render toggles
     terrain.setWireframe(Boolean.TRUE.equals(CVars.RENDER_TERRAIN_WIREFRAME.get()));
     terrain.setChunkGrid(Boolean.TRUE.equals(CVars.RENDER_TERRAIN_CHUNK_GRID.get()));
     this.edCam.setHeightSampler(terrain);
+    this.edCam.setTerrainForRaycast(terrain);
     this.edCam.setClampToGround(false);
     this.edCam.setLockPivotYZero(true);
     // FPS controller init
@@ -402,7 +498,7 @@ public class EditorScreen implements Screen {
     // Initial values from CVars (kept in sync with Settings)
     hour = CVars.RENDER_TIME_OF_DAY.get();
     updateSunFromHour();
-
+    
     // Render pipeline
     ctx = new RenderContext(cam, sunDirWorld);
     pipeline = RenderBootstrap.build(ctx, terrain, RenderBootstrap.Config.defaultConfig());
@@ -440,14 +536,14 @@ public class EditorScreen implements Screen {
     CVars.RENDER_SHOW_OUTER_LOD.onChanged(v -> showOuterLod = Boolean.TRUE.equals(v));
 
     // HUD
-    hud = new EditorHUD();
     terrainLayerRef = new TerrainLayer(terrain, hud.skin());
     layers.add(terrainLayerRef);
     layers.add(new WalkLayer(terrain, hud.skin(), fpsCam));
     splinesLayerRef = new SplinesLayer(terrain, hud.skin());
     layers.add(splinesLayerRef);
 
-    // Centralized processor install: ensure deterministic order [mountains -> rivers]
+    // Build a simple loading overlay on the HUD stage
+    // Centralized processor install: ensure deterministic order [rivers -> mountains]
     terrain.setChunkHeightPostProcessor(null);
     if (splinesLayerRef != null) {
       terrain.addChunkHeightPostProcessor(
@@ -463,7 +559,10 @@ public class EditorScreen implements Screen {
               terrainLayerRef.getMountainTool().getStampsSupplier()));
     }
     // Initial apply so current view reflects processors
-    terrain.reloadAllChunks();
+    showLoading("Loading world...");
+    // Hide overlay when chunks settle
+    terrain.addChunksChangedListener(() -> Gdx.app.postRunnable(() -> onChunksChanged()));
+    terrain.reloadAllChunksAsyncInPlace();
 
     hud.build(layers, new EditorHUD.Callbacks() {
       @Override public void onBack() { app.goToMenu(); }
@@ -536,10 +635,29 @@ public class EditorScreen implements Screen {
       }
     );
     Gdx.input.setInputProcessor(router);
+
+    // Centralized refresh runner for tools (splines, mountains, etc.)
+    com.example.game.World.Editor.EditorContext.setRefreshRunner(label -> performRefreshWithLabel(label));
+    }); // end deferred init
   }
 
 
   @Override public void render(float dt) {
+    // If deferred init hasn't completed yet, render a minimal frame (HUD/overlay) and return
+    if (terrain == null || pipeline == null || ctx == null) {
+      elapsed += dt;
+      // Clear
+      Gdx.gl.glViewport(0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
+      Gdx.gl.glClearColor(0.05f, 0.07f, 0.10f, 1f);
+      Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT | GL20.GL_DEPTH_BUFFER_BIT);
+      // Draw HUD/overlay if available
+      if (hud != null) {
+        hud.setFps(Gdx.graphics.getFramesPerSecond());
+        hud.actAndDraw(dt);
+      }
+      return;
+    }
+
     elapsed += dt;
     ctx.elapsedSeconds = elapsed;
 
@@ -557,8 +675,13 @@ public class EditorScreen implements Screen {
     if (useFps) { fpsCam.update(cam); } else { edCam.update(cam); }
     var f = edCam.focus();
     terrain.updateAndStream(f.x, f.z);
+    // Apply a few async chunk reload results per frame to smooth allocations
+    terrain.applyPendingReloads(4);
     layers.update(dt, hud.skin());
     layers.render3D(cam);
+
+    // Loading overlay tick (poll streaming progress without blocking)
+    tickLoading();
 
     // Clear
     Gdx.gl.glViewport(0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
@@ -665,9 +788,11 @@ public class EditorScreen implements Screen {
     }
   }
 
-  private void performRefresh() {
-    // Reload chunks to reapply processors and current edits
-    terrain.reloadAllChunks();
+  private void performRefreshWithLabel(String label) {
+    // Reload chunks to reapply processors and current edits (async, incremental)
+    showLoading(label == null ? "Refreshing..." : label);
+    if (terrain == null) return; // deferred init still running; overlay will remain until ready
+    terrain.reloadAllChunksAsyncInPlace();
     // Ensure ribbons reflect current terrain (post-processed heights)
     if (splinesLayerRef != null) {
       for (var s : splinesLayerRef.getSplines()) {
@@ -755,6 +880,10 @@ public class EditorScreen implements Screen {
         }
       } catch (Throwable ignored) {}
     });
+  }
+
+  private void performRefresh() {
+    performRefreshWithLabel("Refreshing...");
   }
 
   // Compute additive mountain delta (meters) at a world XZ by sampling current mountain stamps.

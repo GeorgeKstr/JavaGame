@@ -88,7 +88,7 @@ public abstract class BaseSplineTool implements Tool {
         sel.markRibbonDirty();
         sel.rebuildRibbonAsync(terrain, 2);
       }
-      terrain.reloadAllChunks();
+      com.example.game.World.Editor.EditorContext.requestRefresh("Updating splines...");
     }
     dragging = false;
   }
@@ -139,7 +139,7 @@ public abstract class BaseSplineTool implements Tool {
     EditorContext.setSelectedPlaceable(spline);
     spline.markRibbonDirty();
     spline.rebuildRibbonAsync(terrain, 2);
-    terrain.reloadAllChunks();
+    com.example.game.World.Editor.EditorContext.requestRefresh("Updating splines...");
     onSelectionChangedUI(spline, insertAt);
   }
 
