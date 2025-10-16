@@ -34,6 +34,7 @@ public final class MountainTool implements Tool {
   private Label selLabel;
   private Slider intensitySlider, falloffSlider, scaleXSlider, scaleZSlider, rotSlider;
   private Label intensityLabel, falloffLabel, scaleXLabel, scaleZLabel, rotLabel;
+  private com.badlogic.gdx.scenes.scene2d.ui.CheckBox invertedCheck;
   private com.badlogic.gdx.scenes.scene2d.ui.List<String> nodeList;
   private TextButton deleteBtn;
   private boolean postInstalled = false;
@@ -59,12 +60,170 @@ public final class MountainTool implements Tool {
     this.terrain.addChunksChangedListener(() -> { try { saveMountainsToMap(); } catch (Throwable ignored) {} });
   }
 
+  // Apply the currently selected mountain into baseline HMXS across all affected chunks, save, and remove node
+  private void makeSelectedPermanent() {
+    if (terrain == null || selected == null || selected.heightmap == null) return;
+    var map = terrain.getMap();
+    var mf = map.getManifest();
+    final int S = mf.samplesPerSide;
+    final float tile = mf.tile;
+    final float yScale = terrain.getYScale();
+
+    Node n = selected;
+    float cxw = n.center.x, czw = n.center.z;
+    float radius = (float)Math.hypot(n.halfW, n.halfH);
+    int cpc = S - 1;
+    float chunkSize = cpc * tile;
+    int minCx = (int)Math.floor((cxw - radius) / chunkSize);
+    int maxCx = (int)Math.floor((cxw + radius) / chunkSize);
+    int minCz = (int)Math.floor((czw - radius) / chunkSize);
+    int maxCz = (int)Math.floor((czw + radius) / chunkSize);
+
+    java.util.Map<String, byte[]> toWrite = new java.util.LinkedHashMap<>();
+
+    // Precompute rotation and inverses
+    float sin = (float)Math.sin(Math.toRadians(n.rotationDeg));
+    float cos = (float)Math.cos(Math.toRadians(n.rotationDeg));
+    float invHalfW = 1f / Math.max(1e-6f, n.halfW);
+    float invHalfH = 1f / Math.max(1e-6f, n.halfH);
+
+    for (int cz = minCz; cz <= maxCz; cz++) {
+      for (int cx = minCx; cx <= maxCx; cx++) {
+        boolean listed = false;
+        for (int[] c : mf.chunks) { if (c != null && c.length >= 2 && c[0]==cx && c[1]==cz) { listed = true; break; } }
+        if (!listed) mf.chunks.add(new int[]{cx, cz});
+        // Load existing HMXS or create blank
+        com.example.game.World.SparseChunkProvider.LoadedChunk lc;
+        byte[] raw = map.readChunkHmx(cx, cz);
+        if (raw != null && raw.length > 0) {
+          lc = new com.example.game.World.SparseChunkProvider("", S).loadFromBytes(raw);
+        } else {
+          // create empty arrays
+          int samples = S * S;
+          short[] heights = new short[samples];
+          byte[] id0 = new byte[samples];
+          byte[] id1 = new byte[samples];
+          byte[] id2 = new byte[samples];
+          byte[] w0  = new byte[samples];
+          byte[] w1  = new byte[samples];
+          byte[] w2  = new byte[samples];
+          for (int i = 0; i < samples; i++) { id0[i]=0; id1[i]=0; id2[i]=0; w0[i]=(byte)255; w1[i]=0; w2[i]=0; }
+          lc = new com.example.game.World.SparseChunkProvider.LoadedChunk(heights, id0, id1, id2, w0, w1, w2);
+        }
+
+        short[] heights = lc.heights;
+        byte[] id0 = lc.id0, id1 = lc.id1, id2 = lc.id2, w0 = lc.w0, w1 = lc.w1, w2 = lc.w2;
+
+        float originX = cx * chunkSize;
+        float originZ = cz * chunkSize;
+
+        // Iterate overlap region inside this chunk
+        int x0 = Math.max(0, (int)Math.floor((cxw - radius - originX) / tile));
+        int x1 = Math.min(S - 1, (int)Math.ceil((cxw + radius - originX) / tile));
+        int z0 = Math.max(0, (int)Math.floor((czw - radius - originZ) / tile));
+        int z1 = Math.min(S - 1, (int)Math.ceil((czw + radius - originZ) / tile));
+
+        for (int gz = z0; gz <= z1; gz++) {
+          float wz = originZ + gz * tile;
+          for (int gx = x0; gx <= x1; gx++) {
+            // 4x4 supersampling within the cell to further reduce banding
+            float wx = originX + gx * tile;
+            float deltaMetersAvg = 0f;
+            for (int sy = 0; sy < 4; sy++) {
+              for (int sx = 0; sx < 4; sx++) {
+                float fx = (sx + 0.5f) / 4f; // 0.125, 0.375, 0.625, 0.875
+                float fz = (sy + 0.5f) / 4f;
+                float ox = fx * tile;
+                float oz = fz * tile;
+                float px = wx + ox;
+                float pz = wz + oz;
+                float lx = px - cxw, lz = pz - czw;
+                float rx =  lx * cos + lz * sin;
+                float rz = -lx * sin + lz * cos;
+                float ax = Math.abs(rx) * invHalfW;
+                float az = Math.abs(rz) * invHalfH;
+                if (ax > 1f || az > 1f) continue;
+                float u = (rx * 0.5f / n.halfW) + 0.5f;
+                float v = (rz * 0.5f / n.halfH) + 0.5f;
+                float lum = sampleLumBilinear(n.heightmap, u, v);
+                float ff = Math.max(0f, Math.min(1f, n.edgeFalloff));
+                float t = Math.max(ax, az);
+                float bandStart = 1f - ff;
+                float denom = Math.max(1e-6f, 1f - bandStart);
+                float s2 = Math.max(0f, Math.min(1f, (t - bandStart) / denom));
+                float shapedEdge = 1f - (s2*s2*(3f - 2f*s2));
+                deltaMetersAvg += n.intensity * lum * shapedEdge;
+              }
+            }
+            deltaMetersAvg *= (1f / 16f); // average of 16 sub-samples
+            if (selected != null && selected.inverted) deltaMetersAvg = -deltaMetersAvg;
+            int idx = gz * S + gx;
+            int deltaUnits = Math.round(deltaMetersAvg / Math.max(1e-6f, yScale));
+            int nv = heights[idx] + deltaUnits;
+            if (nv < Short.MIN_VALUE) nv = Short.MIN_VALUE; else if (nv > Short.MAX_VALUE) nv = Short.MAX_VALUE;
+            heights[idx] = (short)nv;
+          }
+        }
+
+        try {
+          byte[] blob = com.example.game.World.SparseChunkWriter.encodeToBytes(S, heights, id0, id1, id2, w0, w1, w2);
+          toWrite.put(cx + "_" + cz + ".hmx", blob);
+        } catch (Exception ex) {
+          // fail this chunk but continue others
+        }
+      }
+    }
+
+    // Remove node first and persist mountains.json so the deletion is included in this delta save
+    int old = selectedIndex; nodes.remove(selected); selected = null; selectedIndex = Math.min(old, nodes.size()-1); if (selectedIndex >= 0) selected = nodes.get(selectedIndex);
+    rebuildNodeList(); selLabel.setText(selected==null?"Selected: none":String.format("Selected: %s (%.1f, %.1f)",(selected.imageName==null?"-":selected.imageName), selected.center.x, selected.center.z));
+    saveMountainsToMap();
+
+    // Now delta-save chunks + staged extras (updated mountains.json)
+    if (!toWrite.isEmpty()) {
+      map.saveInPlaceDeltaIncludingStaged(toWrite);
+    } else {
+      // still write mountains.json removal even if no chunk bytes changed
+      map.saveInPlaceDeltaIncludingStaged(java.util.Collections.emptyMap());
+    }
+
+    // Refresh terrain so baked chunks update in view
+    terrain.reloadAllChunks();
+  }
+
+  private static float sampleLumBilinear(Pixmap pm, float u, float v) {
+    if (pm == null) return 0f;
+    int iw = pm.getWidth();
+    int ih = pm.getHeight();
+    if (iw <= 0 || ih <= 0) return 0f;
+    float fx = Math.max(0f, Math.min(iw - 1f, u * (iw - 1)));
+    float fy = Math.max(0f, Math.min(ih - 1f, v * (ih - 1)));
+    int x0 = (int)Math.floor(fx), x1 = Math.min(iw - 1, x0 + 1);
+    int y0 = (int)Math.floor(fy), y1 = Math.min(ih - 1, y0 + 1);
+    float tx = fx - x0, ty = fy - y0;
+    int p00 = pm.getPixel(x0, y0);
+    int p10 = pm.getPixel(x1, y0);
+    int p01 = pm.getPixel(x0, y1);
+    int p11 = pm.getPixel(x1, y1);
+    float r00 = ((p00 >>> 24) & 0xff) / 255f; float g00 = ((p00 >>> 16) & 0xff) / 255f; float b00 = ((p00 >>> 8) & 0xff) / 255f;
+    float r10 = ((p10 >>> 24) & 0xff) / 255f; float g10 = ((p10 >>> 16) & 0xff) / 255f; float b10 = ((p10 >>> 8) & 0xff) / 255f;
+    float r01 = ((p01 >>> 24) & 0xff) / 255f; float g01 = ((p01 >>> 16) & 0xff) / 255f; float b01 = ((p01 >>> 8) & 0xff) / 255f;
+    float r11 = ((p11 >>> 24) & 0xff) / 255f; float g11 = ((p11 >>> 16) & 0xff) / 255f; float b11 = ((p11 >>> 8) & 0xff) / 255f;
+    float l00 = (r00 + g00 + b00) / 3f;
+    float l10 = (r10 + g10 + b10) / 3f;
+    float l01 = (r01 + g01 + b01) / 3f;
+    float l11 = (r11 + g11 + b11) / 3f;
+    float lx0 = l00 + (l10 - l00) * tx;
+    float lx1 = l01 + (l11 - l01) * tx;
+    return lx0 + (lx1 - lx0) * ty;
+  }
+
   // Supplier used by centralized processor installation (EditorScreen)
   public java.util.function.Supplier<java.util.List<TerrainSystem.MountainStamp>> getStampsSupplier() {
     return this::buildStampsFromNodes;
   }
 
-  @Override public String name() { return "Mountain"; }
+  @Override public String name() { return "Heightmap"; }
 
   @Override public void onSelected() {
     if (shader == null) {
@@ -141,7 +300,12 @@ public final class MountainTool implements Tool {
 
     falloffLabel = new Label("Edge falloff: -", skin); falloffSlider = new Slider(0f, 1f, 0.01f, false, skin);
     falloffSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ if (updatingUI || selected==null) return; selected.edgeFalloff = falloffSlider.getValue(); falloffLabel.setText(String.format("Edge falloff: %.2f", selected.edgeFalloff)); }});
-    t.add(falloffLabel).left().padTop(6).row(); t.add(falloffSlider).width(260).row();
+    t.add(falloffLabel).left().row(); t.add(falloffSlider).width(260).row();
+
+    // Inverted checkbox
+    invertedCheck = new com.badlogic.gdx.scenes.scene2d.ui.CheckBox(" Inverted (depth)", skin);
+    invertedCheck.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ if (updatingUI || selected == null) return; selected.inverted = invertedCheck.isChecked(); terrain.reloadAllChunks(); saveMountainsToMap(); }});
+    t.add(invertedCheck).left().padTop(6).row();
 
     scaleXLabel = new Label("Half-width X: -", skin); scaleXSlider = new Slider(5f, 1500f, 1f, false, skin);
     scaleXSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ if (updatingUI || selected==null) return; selected.halfW = scaleXSlider.getValue(); scaleXLabel.setText(String.format("Half-width X: %.1f m", selected.halfW)); }});
@@ -162,6 +326,13 @@ public final class MountainTool implements Tool {
       saveMountainsToMap();
     }});
     container.add(deleteBtn).left().padTop(8).row();
+
+    // Make Permanent
+    TextButton makePerm = new TextButton("Make Permanent", skin);
+    makePerm.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+      makeSelectedPermanent();
+    }});
+    container.add(makePerm).left().padTop(4).row();
 
     // Buttons logic
     importBtn.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor) {
@@ -270,7 +441,7 @@ public final class MountainTool implements Tool {
       MountainStamp s = new MountainStamp();
       s.heightmap = n.heightmap; s.centerX = n.center.x; s.centerZ = n.center.z;
       s.halfW = n.halfW; s.halfH = n.halfH; s.rotationDeg = n.rotationDeg;
-      s.intensity = n.intensity; s.edgeFalloff = n.edgeFalloff;
+      s.intensity = n.intensity; s.edgeFalloff = n.edgeFalloff; s.inverted = n.inverted;
       list.add(s);
     }
     return list;
@@ -508,6 +679,7 @@ public final class MountainTool implements Tool {
         .append(",\"rot\":").append(n.rotationDeg)
         .append(",\"intensity\":").append(n.intensity)
         .append(",\"falloff\":").append(n.edgeFalloff)
+        .append(",\"inverted\":").append(n.inverted)
         .append('}');
     }
     sb.append("]}");
@@ -534,6 +706,7 @@ public final class MountainTool implements Tool {
       float rot = e.getFloat("rot", 0f);
       float intensity = e.getFloat("intensity", 20f);
       float falloff = e.getFloat("falloff", 0.5f);
+      boolean inverted = e.getBoolean("inverted", false);
       Pixmap pm = null;
       if (img != null) {
         byte[] ib = terrain.getMap().readEntry(img);
@@ -542,7 +715,7 @@ public final class MountainTool implements Tool {
       Node n = new Node();
       n.center.set(cx, 0f, cz);
       n.halfW = halfW; n.halfH = halfH; n.rotationDeg = rot;
-      n.intensity = intensity; n.edgeFalloff = falloff;
+      n.intensity = intensity; n.edgeFalloff = falloff; n.inverted = inverted;
       n.heightmap = pm; n.preview = (pm != null ? new Texture(pm) : null);
       n.imageName = name;
       nodes.add(n);
@@ -557,6 +730,11 @@ public final class MountainTool implements Tool {
     }
   }
 
+  // Public: stage current mountains (JSON+images) into MapResource for upcoming save
+  public void stageMountainsForSave() {
+    try { saveMountainsToMap(); } catch (Throwable ignored) {}
+  }
+
   private static final class Node {
     final Vector3 center = new Vector3();
     float halfW, halfH;
@@ -564,12 +742,13 @@ public final class MountainTool implements Tool {
     float intensity, edgeFalloff;
     Pixmap heightmap; Texture preview;
     String imageName;
+    boolean inverted;
 
     Node cloneNode(){
       Node n = new Node();
       n.center.set(center);
       n.halfW = halfW; n.halfH = halfH; n.rotationDeg = rotationDeg;
-      n.intensity = intensity; n.edgeFalloff = edgeFalloff;
+      n.intensity = intensity; n.edgeFalloff = edgeFalloff; n.inverted = inverted;
       n.heightmap = heightmap; n.preview = preview; // share preview for now
       n.imageName = imageName;
       return n;

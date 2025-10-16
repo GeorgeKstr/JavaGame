@@ -67,12 +67,15 @@ public class TerrainSystem implements HeightSampler {
         float v = (rz * 0.5f / s.halfH) + 0.5f;
         float lum = sampleLumBilinear(s.heightmap, u, v);
         float ff = clamp01(s.edgeFalloff);
-        float t = Math.max(ax, az); // 0 center .. 1 at edge (Chebyshev distance in rect)
+        // Superellipse metric for rounder ramps (p≈2.5)
+        float p = 2.5f;
+        float t = (float)Math.pow(Math.pow(ax, p) + Math.pow(az, p), 1.0 / p);
         float bandStart = 1f - ff; // portion preserved fully; ff=0 -> 1, ff=1 -> 0
         float denom = Math.max(1e-6f, 1f - bandStart);
         float tEdge = clamp01((t - bandStart) / denom); // 0 inside preserved area, 1 at edge
         float shapedEdge = 1f - smoothstep01(tEdge); // 1 inside, smoothly to 0 at edges
-        total += s.intensity * lum * shapedEdge;
+        float sign = s.inverted ? -1f : 1f;
+        total += sign * s.intensity * lum * shapedEdge;
       }
       return total;
     }
@@ -103,117 +106,8 @@ public class TerrainSystem implements HeightSampler {
     public float rotationDeg;        // rotation about +Y, degrees
     public float intensity;          // meters of max raise when heightmap=1
     public float edgeFalloff;        // 0..1 controls softness near edges
+    public boolean inverted;         // if true, apply as depth (subtract)
   }
-/* 
-  public void bakeMountains(java.util.List<MountainStamp> stamps) {
-    if (stamps == null || stamps.isEmpty()) return;
-    final float tile = world.tile;
-    final float yScale = world.yScale;
-
-    // One-time: ensure every loaded chunk has a baseline to restore from (does not overwrite if already present)
-    for (com.badlogic.gdx.utils.IntMap.Entry<TerrainChunk> e : world.chunks) e.value.ensureBaseline();
-
-    // Compute union of affected chunks for ALL stamps, then restore baseline once
-    com.badlogic.gdx.utils.IntSet affected = new com.badlogic.gdx.utils.IntSet();
-    int cpc = world.S - 1;
-    for (MountainStamp s : stamps) {
-      if (s == null || s.heightmap == null) continue;
-      // Compute axis-aligned bounds in world XZ for the rotated rect (conservative: use radius)
-      float radius = (float)Math.hypot(s.halfW, s.halfH);
-      float minX = s.centerX - radius, maxX = s.centerX + radius;
-      float minZ = s.centerZ - radius, maxZ = s.centerZ + radius;
-      int minCx = (int)Math.floor(minX / (cpc * tile));
-      int maxCx = (int)Math.floor(maxX / (cpc * tile));
-      int minCz = (int)Math.floor(minZ / (cpc * tile));
-      int maxCz = (int)Math.floor(maxZ / (cpc * tile));
-      for (int cz = minCz; cz <= maxCz; cz++)
-        for (int cx = minCx; cx <= maxCx; cx++)
-          affected.add(TerrainWorld.key(cx, cz));
-    }
-    for (com.badlogic.gdx.utils.IntSet.IntSetIterator it = affected.iterator(); it.hasNext; ) {
-      int k = it.next();
-      TerrainChunk c = world.chunks.get(k);
-      if (c != null) c.restoreAllFromBaseline();
-    }
-
-    // Stamp all mountains onto restored baseline
-    for (MountainStamp s : stamps) {
-      if (s == null || s.heightmap == null) continue;
-      float cx = s.centerX, cz = s.centerZ;
-      float sin = (float)Math.sin(Math.toRadians(s.rotationDeg));
-      float cos = (float)Math.cos(Math.toRadians(s.rotationDeg));
-      float invHalfW = 1f / Math.max(1e-6f, s.halfW);
-      float invHalfH = 1f / Math.max(1e-6f, s.halfH);
-      int imgW = s.heightmap.getWidth();
-      int imgH = s.heightmap.getHeight();
-
-      // Iterate affected chunks (same conservative AABB)
-      float radius = (float)Math.hypot(s.halfW, s.halfH);
-      float minX = cx - radius, maxX = cx + radius;
-      float minZ = cz - radius, maxZ = cz + radius;
-      int minCx = (int)Math.floor(minX / (cpc * tile));
-      int maxCx = (int)Math.floor(maxX / (cpc * tile));
-      int minCz = (int)Math.floor(minZ / (cpc * tile));
-      int maxCz = (int)Math.floor(maxZ / (cpc * tile));
-
-      for (int czk = minCz; czk <= maxCz; czk++) {
-        for (int cxk = minCx; cxk <= maxCx; cxk++) {
-          TerrainChunk chunk = world.chunks.get(TerrainWorld.key(cxk, czk));
-          if (chunk == null) continue;
-          short[] heights = chunk.getHeightsArray();
-          short[] base = chunk.getBaselineArray();
-          if (heights == null || base == null || heights.length != base.length) continue;
-          int S = world.S;
-          float originX = chunk.getOriginX();
-          float originZ = chunk.getOriginZ();
-          // Bounds in local grid
-          int x0 = Math.max(0, (int)Math.floor((minX - originX) / tile));
-          int x1 = Math.min(S - 1, (int)Math.ceil((maxX - originX) / tile));
-          int z0 = Math.max(0, (int)Math.floor((minZ - originZ) / tile));
-          int z1 = Math.min(S - 1, (int)Math.ceil((maxZ - originZ) / tile));
-
-          for (int gz = z0; gz <= z1; gz++) {
-            float wz = originZ + gz * tile;
-            for (int gx = x0; gx <= x1; gx++) {
-              float wx = originX + gx * tile;
-              // Transform world point into stamp local space (centered, rotated)
-              float lx = wx - cx;
-              float lz = wz - cz;
-              float rx =  lx * cos + lz * sin; // rotate by -rotation (so rectangle axes align)
-              float rz = -lx * sin + lz * cos;
-              float ax = Math.abs(rx) * invHalfW; // 0 at center, 1 at edge along X
-              float az = Math.abs(rz) * invHalfH; // 0 at center, 1 at edge along Z
-              if (ax > 1f || az > 1f) continue;  // outside rectangle
-
-              // Compute UV in [0..1]
-              float u = (rx * 0.5f / s.halfW) + 0.5f;
-              float v = (rz * 0.5f / s.halfH) + 0.5f;
-              if (u < 0f || u > 1f || v < 0f || v > 1f) continue;
-              float lum = sampleLumBilinear(s.heightmap, u, v);
-
-              // Edge falloff: smooth to 0 near edges (separable or radial within rect)
-              float edgeX = smoothstep01(1f - ax);
-              float edgeZ = smoothstep01(1f - az);
-              float edge = edgeX * edgeZ; // stronger falloff toward both edges
-              float ff = clamp01(s.edgeFalloff);
-              float shapedEdge = lerp(edge, (float)Math.pow(edge, 2.2f), ff);
-
-              // Delta meters (raise): intensity * luminance * edge
-              float deltaMeters = s.intensity * lum * shapedEdge;
-              int idx = gz * S + gx;
-              int deltaUnits = Math.round(deltaMeters / Math.max(1e-6f, yScale));
-              int nv = heights[idx] + deltaUnits; // additive over current height (cooperates with rivers)
-              if (nv < Short.MIN_VALUE) nv = Short.MIN_VALUE; else if (nv > Short.MAX_VALUE) nv = Short.MAX_VALUE;
-              heights[idx] = (short)nv;
-            }
-          }
-          chunk.setDirty(true);
-        }
-      }
-    }
-    editor.rebuildDirtyChunks();
-  }
-  */
 
   private static float clamp01(float v) { return v < 0f ? 0f : (v > 1f ? 1f : v); }
   private static float smoothstep01(float x){ float t = clamp01(x); return t*t*(3f - 2f*t); }
@@ -452,25 +346,39 @@ public class TerrainSystem implements HeightSampler {
           float wz = originZ + gz * tile;
           for (int gx = x0; gx <= x1; gx++) {
             float wx = originX + gx * tile;
-            float lx = wx - cxw, lz = wz - czw;
-            float rx =  lx * cos + lz * sin;
-            float rz = -lx * sin + lz * cos;
-            float ax = Math.abs(rx) * invHalfW;
-            float az = Math.abs(rz) * invHalfH;
-            if (ax > 1f || az > 1f) continue;
-            float u = (rx * 0.5f / s.halfW) + 0.5f;
-            float v = (rz * 0.5f / s.halfH) + 0.5f;
-            float lum = sampleLumBilinear(s.heightmap, u, v);
-            float ff = clamp01(s.edgeFalloff);
-            float t = Math.max(ax, az);
-            float bandStart = 1f - ff;
-            float denom = Math.max(1e-6f, 1f - bandStart);
-            float s2 = clamp01((t - bandStart) / denom);
-            float shapedEdge = 1f - smoothstep01(s2);
-            float deltaMeters = s.intensity * lum * shapedEdge;
+            float deltaMetersAvg = 0f;
+            for (int sy = 0; sy < 4; sy++) {
+              for (int sx = 0; sx < 4; sx++) {
+                float fx = (sx + 0.5f) / 4f;
+                float fz = (sy + 0.5f) / 4f;
+                float px = wx + fx * tile;
+                float pz = wz + fz * tile;
+                float lx = px - cxw, lz = pz - czw;
+                float rx =  lx * cos + lz * sin;
+                float rz = -lx * sin + lz * cos;
+                float ax = Math.abs(rx) * invHalfW;
+                float az = Math.abs(rz) * invHalfH;
+                if (ax > 1f || az > 1f) continue;
+                float u = (rx * 0.5f / s.halfW) + 0.5f;
+                float v = (rz * 0.5f / s.halfH) + 0.5f;
+                float lum = sampleLumBilinear(s.heightmap, u, v);
+                float ff = clamp01(s.edgeFalloff);
+                // Superellipse metric for rounder ramps (p≈2.5)
+                float p = 2.5f;
+                float t = (float)Math.pow(Math.pow(ax, p) + Math.pow(az, p), 1.0 / p);
+                float bandStart = 1f - ff;
+                float denom = Math.max(1e-6f, 1f - bandStart);
+                float s2 = clamp01((t - bandStart) / denom);
+                float shapedEdge = 1f - smoothstep01(s2);
+                float sign = s.inverted ? -1f : 1f;
+                deltaMetersAvg += sign * s.intensity * lum * shapedEdge;
+              }
+            }
+            deltaMetersAvg *= (1f / 16f);
             int idx = gz * S + gx;
-            int deltaUnits = Math.round(deltaMeters / Math.max(1e-6f, yScale));
-            int nv = heights[idx] + deltaUnits; // additive raise over current heights
+            int deltaUnits = Math.round(deltaMetersAvg / Math.max(1e-6f, yScale));
+            int base = baseHeights[idx];
+            int nv = base + deltaUnits; // additive over baseline to avoid cumulative double-apply
             if (nv < Short.MIN_VALUE) nv = Short.MIN_VALUE; else if (nv > Short.MAX_VALUE) nv = Short.MAX_VALUE;
             heights[idx] = (short)nv;
           }

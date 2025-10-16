@@ -690,12 +690,14 @@ public class EditorScreen implements Screen {
       int iv = Math.min(ih - 1, Math.max(0, (int)(v * ih)));
       float lum = sampleLumBilinear(s.heightmap, u, v);
       float ff = clamp01(s.edgeFalloff);
-      float t = Math.max(Math.abs(rx) / Math.max(1e-6f, s.halfW), Math.abs(rz) / Math.max(1e-6f, s.halfH));
+      float p = 2.5f;
+      float t = (float)Math.pow(Math.pow(ax, p) + Math.pow(az, p), 1.0 / p);
       float bandStart = 1f - ff;
       float denom = Math.max(1e-6f, 1f - bandStart);
       float s2 = clamp01((t - bandStart) / denom);
       float shapedEdge = 1f - smoothstep01(s2);
-      total += 2 * s.intensity * lum * shapedEdge;
+      float sign = s.inverted ? -1f : 1f;
+      total += sign * s.intensity * lum * shapedEdge;
     }
     return total;
   }
@@ -777,13 +779,17 @@ public class EditorScreen implements Screen {
   private void ensureMapExists(String path) {
     java.nio.file.Path p = java.nio.file.Paths.get(path);
     if (!java.nio.file.Files.exists(p)) {
-      try { NewMapCreator.createBlankMap(path, 64, 2f, 0.5f, 0, 0, 1, 1); }
+      try { NewMapCreator.createBlankMap(path, 64, 4f, 0.5f, 0, 0, 1, 1); }
       catch (Exception e) { throw new RuntimeException("Failed to create blank map at " + path, e); }
     }
   }
   private void saveMap() {
     // Stage latest splines into the map before saving chunks/textures
     if (splinesLayerRef != null) splinesLayerRef.saveSplinesToMap();
+    // Stage mountains (JSON + any images) so current properties are persisted
+    if (terrainLayerRef != null && terrainLayerRef.getMountainTool() != null) {
+      terrainLayerRef.getMountainTool().stageMountainsForSave();
+    }
     terrain.buildManifestMerged();
     terrain.encodeChunksToHmx();
     terrain.saveAll(mapPath);
