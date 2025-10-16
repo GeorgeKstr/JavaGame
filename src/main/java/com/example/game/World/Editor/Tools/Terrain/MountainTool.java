@@ -37,6 +37,11 @@ public final class MountainTool implements Tool {
   private com.badlogic.gdx.scenes.scene2d.ui.List<String> nodeList;
   private TextButton deleteBtn;
   private boolean postInstalled = false;
+  private String lastImportedName;
+  private float handleMarginPct = 0.08f;
+  private boolean updatingUI = false;
+  private int selectedIndex = -1;
+  private static String lastImageDir;
 
   // Simple textured quad shader for preview
   private ShaderProgram shader;
@@ -46,6 +51,7 @@ public final class MountainTool implements Tool {
   private enum DragMode { NONE, MOVE, RESIZE_L, RESIZE_R, RESIZE_T, RESIZE_B }
   private DragMode dragMode = DragMode.NONE;
   private float dragStartX, dragStartZ;
+  private Node draggingNode;
 
   public MountainTool(TerrainSystem terrain) {
     this.terrain = terrain;
@@ -87,13 +93,17 @@ public final class MountainTool implements Tool {
 
   private void rebuildNodeList() {
     if (nodeList == null) return;
-    com.badlogic.gdx.utils.Array<String> items = new com.badlogic.gdx.utils.Array<>();
-    for (int i=0;i<nodes.size();i++) {
-      Node n = nodes.get(i);
-      items.add(String.format("%02d: (%.1f, %.1f) %.0f°", i, n.center.x, n.center.z, n.rotationDeg));
-    }
-    nodeList.setItems(items);
-    if (selected != null) nodeList.setSelectedIndex(nodes.indexOf(selected));
+    updatingUI = true;
+    try {
+      com.badlogic.gdx.utils.Array<String> items = new com.badlogic.gdx.utils.Array<>();
+      for (int i=0;i<nodes.size();i++) {
+        Node n = nodes.get(i);
+        String nm = (n.imageName == null || n.imageName.isEmpty()) ? "-" : n.imageName;
+        items.add(String.format("%02d: %s (%.1f, %.1f)", i, nm, n.center.x, n.center.z, n.rotationDeg));
+      }
+      nodeList.setItems(items);
+      if (selectedIndex >= 0 && selectedIndex < nodes.size()) nodeList.setSelectedIndex(selectedIndex);
+    } finally { updatingUI = false; }
   }
 
   @Override public void buildUI(Table container, Skin skin) {
@@ -101,18 +111,17 @@ public final class MountainTool implements Tool {
     Table row = new Table(); container.add(row).left().padTop(6).row();
 
     TextButton importBtn = new TextButton("Import Heightmap", skin);
-    TextButton addNodeBtn = new TextButton("Add Node at Focus", skin);
     row.add(importBtn).padRight(8);
-    row.add(addNodeBtn).padRight(8);
 
     // Node list
     nodeList = new com.badlogic.gdx.scenes.scene2d.ui.List<>(skin);
     nodeList.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+      if (updatingUI) return;
       int idx = nodeList.getSelectedIndex();
       if (idx >= 0 && idx < nodes.size()) select(nodes.get(idx));
     }});
     ScrollPane sp = new ScrollPane(nodeList, skin); sp.setFadeScrollBars(false);
-    container.add(sp).width(220).height(140).left().padTop(8).row();
+    container.add(sp).width(320).height(140).left().padTop(8).row();
 
     selLabel = new Label("Selected: none", skin);
     container.add(selLabel).left().padTop(6).row();
@@ -121,29 +130,29 @@ public final class MountainTool implements Tool {
     Table t = new Table(); container.add(t).left().row();
 
     intensityLabel = new Label("Intensity: -", skin); intensitySlider = new Slider(0f, 2000f, 1f, false, skin);
-    intensitySlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ if (selected==null) return; selected.intensity = intensitySlider.getValue(); intensityLabel.setText(String.format("Intensity: %.1f m", selected.intensity)); }});
+    intensitySlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ if (updatingUI || selected==null) return; selected.intensity = intensitySlider.getValue(); intensityLabel.setText(String.format("Intensity: %.1f m", selected.intensity)); }});
     t.add(intensityLabel).left().row(); t.add(intensitySlider).width(260).row();
 
     falloffLabel = new Label("Edge falloff: -", skin); falloffSlider = new Slider(0f, 1f, 0.01f, false, skin);
-    falloffSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ if (selected==null) return; selected.edgeFalloff = falloffSlider.getValue(); falloffLabel.setText(String.format("Edge falloff: %.2f", selected.edgeFalloff)); }});
+    falloffSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ if (updatingUI || selected==null) return; selected.edgeFalloff = falloffSlider.getValue(); falloffLabel.setText(String.format("Edge falloff: %.2f", selected.edgeFalloff)); }});
     t.add(falloffLabel).left().padTop(6).row(); t.add(falloffSlider).width(260).row();
 
     scaleXLabel = new Label("Half-width X: -", skin); scaleXSlider = new Slider(5f, 1500f, 1f, false, skin);
-    scaleXSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ if (selected==null) return; selected.halfW = scaleXSlider.getValue(); scaleXLabel.setText(String.format("Half-width X: %.1f m", selected.halfW)); }});
+    scaleXSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ if (updatingUI || selected==null) return; selected.halfW = scaleXSlider.getValue(); scaleXLabel.setText(String.format("Half-width X: %.1f m", selected.halfW)); }});
     t.add(scaleXLabel).left().padTop(6).row(); t.add(scaleXSlider).width(260).row();
 
     scaleZLabel = new Label("Half-height Z: -", skin); scaleZSlider = new Slider(5f, 1500f, 1f, false, skin);
-    scaleZSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ if (selected==null) return; selected.halfH = scaleZSlider.getValue(); scaleZLabel.setText(String.format("Half-height Z: %.1f m", selected.halfH)); }});
+    scaleZSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ if (updatingUI || selected==null) return; selected.halfH = scaleZSlider.getValue(); scaleZLabel.setText(String.format("Half-height Z: %.1f m", selected.halfH)); }});
     t.add(scaleZLabel).left().padTop(6).row(); t.add(scaleZSlider).width(260).row();
 
     rotLabel = new Label("Rotation: -", skin); rotSlider = new Slider(0f, 360f, 1f, false, skin);
-    rotSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ if (selected==null) return; selected.rotationDeg = rotSlider.getValue(); rotLabel.setText(String.format("Rotation: %.0f°", selected.rotationDeg)); }});
+    rotSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ if (updatingUI || selected==null) return; selected.rotationDeg = rotSlider.getValue(); rotLabel.setText(String.format("Rotation: %.0f°", selected.rotationDeg)); }});
     t.add(rotLabel).left().padTop(6).row(); t.add(rotSlider).width(260).row();
 
     // Delete
     deleteBtn = new TextButton("Delete Selected", skin);
     deleteBtn.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
-      if (selected == null) return; nodes.remove(selected); selected = null; rebuildNodeList(); selLabel.setText("Selected: none");
+      if (selected == null) return; int old = selectedIndex; nodes.remove(selected); selected = null; selectedIndex = Math.min(old, nodes.size()-1); if (selectedIndex >= 0) selected = nodes.get(selectedIndex); rebuildNodeList(); selLabel.setText(selected==null?"Selected: none":String.format("Selected: %s (%.1f, %.1f)",(selected.imageName==null?"-":selected.imageName), selected.center.x, selected.center.z));
     }});
     container.add(deleteBtn).left().padTop(8).row();
 
@@ -153,18 +162,12 @@ public final class MountainTool implements Tool {
       if (pm == null) return;
       Node n = new Node();
       n.heightmap = pm; n.preview = new Texture(pm);
+      n.imageName = lastImportedName;
       n.intensity = 20f; n.edgeFalloff = 0.5f; n.halfW = 50f; n.halfH = 50f; n.rotationDeg = 0f;
       EditorContext.getFocusPosition(n.center);
       nodes.add(n); select(n); rebuildNodeList();
     }});
 
-    addNodeBtn.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor) {
-      if (nodes.isEmpty()) return;
-      Node src = selected != null ? selected : nodes.get(nodes.size()-1);
-      Node n = src.cloneNode();
-      EditorContext.getFocusPosition(n.center);
-      nodes.add(n); select(n); rebuildNodeList();
-    }});
 
     
 
@@ -175,18 +178,22 @@ public final class MountainTool implements Tool {
 
   private void select(Node n){
     selected = n;
-    if (selLabel != null) selLabel.setText("Selected: "+ (n==null?"none":String.format("(%.1f, %.1f)", n.center.x, n.center.z)) );
+    selectedIndex = (n == null ? -1 : nodes.indexOf(n));
+    if (selLabel != null) selLabel.setText("Selected: "+ (n==null?"none":String.format("%s (%.1f, %.1f)", (n.imageName==null?"-":n.imageName), n.center.x, n.center.z)) );
     if (n != null) {
-      if (intensitySlider != null) intensitySlider.setValue(n.intensity);
-      if (falloffSlider != null) falloffSlider.setValue(n.edgeFalloff);
-      if (scaleXSlider != null) scaleXSlider.setValue(n.halfW);
-      if (scaleZSlider != null) scaleZSlider.setValue(n.halfH);
-      if (rotSlider != null) rotSlider.setValue(n.rotationDeg);
-      if (intensityLabel != null) intensityLabel.setText(String.format("Intensity: %.1f m", n.intensity));
-      if (falloffLabel != null) falloffLabel.setText(String.format("Edge falloff: %.2f", n.edgeFalloff));
-      if (scaleXLabel != null) scaleXLabel.setText(String.format("Half-width X: %.1f m", n.halfW));
-      if (scaleZLabel != null) scaleZLabel.setText(String.format("Half-height Z: %.1f m", n.halfH));
-      if (rotLabel != null) rotLabel.setText(String.format("Rotation: %.0f°", n.rotationDeg));
+      updatingUI = true;
+      try {
+        if (intensitySlider != null) intensitySlider.setValue(n.intensity);
+        if (falloffSlider != null) falloffSlider.setValue(n.edgeFalloff);
+        if (scaleXSlider != null) scaleXSlider.setValue(n.halfW);
+        if (scaleZSlider != null) scaleZSlider.setValue(n.halfH);
+        if (rotSlider != null) rotSlider.setValue(n.rotationDeg);
+        if (intensityLabel != null) intensityLabel.setText(String.format("Intensity: %.1f m", n.intensity));
+        if (falloffLabel != null) falloffLabel.setText(String.format("Edge falloff: %.2f", n.edgeFalloff));
+        if (scaleXLabel != null) scaleXLabel.setText(String.format("Half-width X: %.1f m", n.halfW));
+        if (scaleZLabel != null) scaleZLabel.setText(String.format("Half-height Z: %.1f m", n.halfH));
+        if (rotLabel != null) rotLabel.setText(String.format("Rotation: %.0f°", n.rotationDeg));
+      } finally { updatingUI = false; }
     }
   }
 
@@ -197,15 +204,55 @@ public final class MountainTool implements Tool {
         javax.swing.JFileChooser fc = new javax.swing.JFileChooser();
         fc.setDialogTitle("Import Heightmap");
         fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Images", "png", "jpg", "jpeg", "bmp"));
+        if (lastImageDir != null) fc.setCurrentDirectory(new java.io.File(lastImageDir));
         if (fc.showOpenDialog(null) == javax.swing.JFileChooser.APPROVE_OPTION) {
           abs[0] = fc.getSelectedFile().getAbsolutePath();
+          java.io.File sel = fc.getSelectedFile();
+          if (sel != null && sel.getParent() != null) lastImageDir = sel.getParent();
         }
       });
     } catch (Exception ignored) {}
     if (abs[0] == null) return null;
     var fh = Gdx.files.absolute(abs[0]);
     if (!fh.exists()) return null;
-    return new Pixmap(fh);
+    lastImportedName = fh.name();
+    Pixmap pm = new Pixmap(fh);
+    normalizeHeightmap(pm);
+    return pm;
+  }
+
+  // Normalize luminance of a Pixmap to [0..1] and write back as grayscale (keeps alpha)
+  private static void normalizeHeightmap(Pixmap pm) {
+    if (pm == null) return;
+    int w = pm.getWidth(), h = pm.getHeight();
+    if (w <= 0 || h <= 0) return;
+    float min = 1f, max = 0f;
+    for (int y = 0; y < h; y++) {
+      for (int x = 0; x < w; x++) {
+        int p = pm.getPixel(x, y);
+        float r = ((p >>> 24) & 0xff) / 255f;
+        float g = ((p >>> 16) & 0xff) / 255f;
+        float b = ((p >>> 8)  & 0xff) / 255f;
+        float l = (r + g + b) / 3f;
+        if (l < min) min = l;
+        if (l > max) max = l;
+      }
+    }
+    float range = Math.max(1e-6f, max - min);
+    for (int y = 0; y < h; y++) {
+      for (int x = 0; x < w; x++) {
+        int p = pm.getPixel(x, y);
+        int a = (p & 0xff);
+        float r = ((p >>> 24) & 0xff) / 255f;
+        float g = ((p >>> 16) & 0xff) / 255f;
+        float b = ((p >>> 8)  & 0xff) / 255f;
+        float l = (r + g + b) / 3f;
+        float ln = (l - min) / range;
+        int gi = Math.max(0, Math.min(255, Math.round(ln * 255f)));
+        int rgba = ((gi & 0xff) << 24) | ((gi & 0xff) << 16) | ((gi & 0xff) << 8) | (a & 0xff);
+        pm.drawPixel(x, y, rgba);
+      }
+    }
   }
 
   private List<MountainStamp> buildStampsFromNodes(){
@@ -235,58 +282,67 @@ public final class MountainTool implements Tool {
     Camera cam = EditorContext.getCamera();
     if (cam == null) return;
     if (!groundHit(cam, mouseW)) return;
-    // Select closest node under cursor, prefer later nodes
     Node hit = pickNode(mouseW.x, mouseW.z);
     if (hit != null) {
       select(hit);
-      // detect edge handles (margin in meters)
-      DragMode m = detectHandle(hit, mouseW.x, mouseW.z, 1.5f);
+      draggingNode = hit;
+      float base = Math.max(hit.halfW, hit.halfH);
+      float marginMeters = Math.max(0.5f, handleMarginPct * base);
+      DragMode m = detectHandle(hit, mouseW.x, mouseW.z, marginMeters);
       dragMode = m;
       dragStartX = mouseW.x; dragStartZ = mouseW.z;
     } else {
       dragMode = DragMode.NONE;
+      draggingNode = null;
+      select(null);
+      rebuildNodeList();
     }
   }
 
   @Override public void onPointerDrag(int button, boolean shift, boolean ctrl) {
     Camera cam = EditorContext.getCamera();
-    if (cam == null || selected == null) return;
+    if (cam == null || draggingNode == null) return;
     if (!groundHit(cam, mouseW)) return;
     float dx = mouseW.x - dragStartX;
     float dz = mouseW.z - dragStartZ;
     if (dragMode == DragMode.MOVE) {
-      selected.center.add(dx, 0f, dz);
+      draggingNode.center.add(dx, 0f, dz);
       dragStartX = mouseW.x; dragStartZ = mouseW.z;
       rebuildNodeList();
     } else if (dragMode != DragMode.NONE) {
       // Resize along the selected edge in local space
-      float s = MathUtils.sinDeg(selected.rotationDeg), c = MathUtils.cosDeg(selected.rotationDeg);
+      float s = MathUtils.sinDeg(draggingNode.rotationDeg), c = MathUtils.cosDeg(draggingNode.rotationDeg);
       // transform delta to local axes
       float lx =  c*dx + s*dz;
       float lz = -s*dx + c*dz;
       switch (dragMode) {
-        case RESIZE_L: selected.halfW = Math.max(1f, selected.halfW - lx); selected.center.mulAdd(new Vector3(-c,0f,-s), lx*0.5f); break;
-        case RESIZE_R: selected.halfW = Math.max(1f, selected.halfW + lx); selected.center.mulAdd(new Vector3( c,0f, s), lx*0.5f); break;
-        case RESIZE_B: selected.halfH = Math.max(1f, selected.halfH - lz); selected.center.mulAdd(new Vector3( s,0f,-c), lz*0.5f); break;
-        case RESIZE_T: selected.halfH = Math.max(1f, selected.halfH + lz); selected.center.mulAdd(new Vector3(-s,0f, c), lz*0.5f); break;
+        case RESIZE_L: draggingNode.halfW = Math.max(1f, draggingNode.halfW - lx); draggingNode.center.mulAdd(new Vector3(-c,0f,-s), lx*0.5f); break;
+        case RESIZE_R: draggingNode.halfW = Math.max(1f, draggingNode.halfW + lx); draggingNode.center.mulAdd(new Vector3( c,0f, s), lx*0.5f); break;
+        case RESIZE_B: draggingNode.halfH = Math.max(1f, draggingNode.halfH - lz); draggingNode.center.mulAdd(new Vector3( s,0f,-c), lz*0.5f); break;
+        case RESIZE_T: draggingNode.halfH = Math.max(1f, draggingNode.halfH + lz); draggingNode.center.mulAdd(new Vector3(-s,0f, c), lz*0.5f); break;
         default: break;
       }
       dragStartX = mouseW.x; dragStartZ = mouseW.z;
       // Sync sliders
-      if (scaleXSlider != null) scaleXSlider.setValue(selected.halfW);
-      if (scaleZSlider != null) scaleZSlider.setValue(selected.halfH);
-      if (scaleXLabel != null) scaleXLabel.setText(String.format("Half-width X: %.1f m", selected.halfW));
-      if (scaleZLabel != null) scaleZLabel.setText(String.format("Half-height Z: %.1f m", selected.halfH));
-      rebuildNodeList();
+      updatingUI = true;
+      try {
+        if (scaleXSlider != null) scaleXSlider.setValue(draggingNode.halfW);
+        if (scaleZSlider != null) scaleZSlider.setValue(draggingNode.halfH);
+        if (scaleXLabel != null) scaleXLabel.setText(String.format("Half-width X: %.1f m", draggingNode.halfW));
+        if (scaleZLabel != null) scaleZLabel.setText(String.format("Half-height Z: %.1f m", draggingNode.halfH));
+        rebuildNodeList();
+      } finally { updatingUI = false; }
     }
   }
 
-  @Override public void onPointerUp(int button, boolean shift, boolean ctrl) { dragMode = DragMode.NONE; terrain.reloadAllChunks(); }
+  @Override public void onPointerUp(int button, boolean shift, boolean ctrl) { if (dragMode != DragMode.NONE) terrain.reloadAllChunks(); dragMode = DragMode.NONE; draggingNode = null; }
 
   private Node pickNode(float x, float z){
     for (int i = nodes.size()-1; i>=0; i--) {
       Node n = nodes.get(i);
-      if (pointInRect(n, x, z, 0.0f)) return n;
+      float base = Math.max(n.halfW, n.halfH);
+      float marginMeters = Math.max(0.5f, handleMarginPct * base);
+      if (pointInRect(n, x, z, marginMeters)) return n;
     }
     return null;
   }
@@ -330,7 +386,7 @@ public final class MountainTool implements Tool {
     if (shader != null) {
       shader.bind();
       shader.setUniformMatrix("uProjView", cam.combined);
-      shader.setUniformf("uAlpha", 0.8f);
+      shader.setUniformf("uAlpha", 0.35f);
     }
 
     for (Node n : nodes) {
@@ -371,11 +427,9 @@ public final class MountainTool implements Tool {
         mesh.dispose();
       }
 
-      // draw edge lines (always)
-      float r = 0.2f, g = 0.8f, b = 1.0f, a = 0.9f;
-      Gdx.gl.glLineWidth(2f);
+      float r = (n == selected ? 1.0f : 0.2f), g = (n == selected ? 0.9f : 0.8f), b = (n == selected ? 0.2f : 1.0f), a = (n == selected ? 1f : 0.2f);
+      Gdx.gl.glLineWidth(n == selected ? 3f : 2f);
       imLines.begin(cam.combined, GL20.GL_LINES);
-      // 0-1, 1-2, 2-3, 3-0
       imLines.color(r,g,b,a); imLines.vertex(wx[0], 0f, wz[0]);
       imLines.color(r,g,b,a); imLines.vertex(wx[1], 0f, wz[1]);
       imLines.color(r,g,b,a); imLines.vertex(wx[1], 0f, wz[1]);
@@ -384,6 +438,29 @@ public final class MountainTool implements Tool {
       imLines.color(r,g,b,a); imLines.vertex(wx[3], 0f, wz[3]);
       imLines.color(r,g,b,a); imLines.vertex(wx[3], 0f, wz[3]);
       imLines.color(r,g,b,a); imLines.vertex(wx[0], 0f, wz[0]);
+      float base = Math.max(hw, hh);
+      float marginMeters = Math.max(0.5f, handleMarginPct * base);
+      float iw = Math.max(0f, hw - marginMeters);
+      float ih = Math.max(0f, hh - marginMeters);
+      float[] ilx = new float[]{ -iw,  iw,  iw, -iw };
+      float[] ilz = new float[]{ -ih, -ih,  ih,  ih };
+      float[] ix = new float[4];
+      float[] iz = new float[4];
+      for (int i=0;i<4;i++){
+        float rx2 =  ilx[i]*c - ilz[i]*s;
+        float rz2 =  ilx[i]*s + ilz[i]*c;
+        ix[i] = cx + rx2;
+        iz[i] = cz + rz2;
+      }
+      float rr = 1.0f, gg = 1.0f, bb = 1.0f, aa = 0.25f;
+      imLines.color(rr,gg,bb,aa); imLines.vertex(ix[0], 0f, iz[0]);
+      imLines.color(rr,gg,bb,aa); imLines.vertex(ix[1], 0f, iz[1]);
+      imLines.color(rr,gg,bb,aa); imLines.vertex(ix[1], 0f, iz[1]);
+      imLines.color(rr,gg,bb,aa); imLines.vertex(ix[2], 0f, iz[2]);
+      imLines.color(rr,gg,bb,aa); imLines.vertex(ix[2], 0f, iz[2]);
+      imLines.color(rr,gg,bb,aa); imLines.vertex(ix[3], 0f, iz[3]);
+      imLines.color(rr,gg,bb,aa); imLines.vertex(ix[3], 0f, iz[3]);
+      imLines.color(rr,gg,bb,aa); imLines.vertex(ix[0], 0f, iz[0]);
       imLines.end();
     }
 
@@ -399,6 +476,7 @@ public final class MountainTool implements Tool {
     float rotationDeg;
     float intensity, edgeFalloff;
     Pixmap heightmap; Texture preview;
+    String imageName;
 
     Node cloneNode(){
       Node n = new Node();
@@ -406,6 +484,7 @@ public final class MountainTool implements Tool {
       n.halfW = halfW; n.halfH = halfH; n.rotationDeg = rotationDeg;
       n.intensity = intensity; n.edgeFalloff = edgeFalloff;
       n.heightmap = heightmap; n.preview = preview; // share preview for now
+      n.imageName = imageName;
       return n;
     }
   }

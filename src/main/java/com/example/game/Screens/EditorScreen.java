@@ -685,16 +685,14 @@ public class EditorScreen implements Screen {
       int iw = s.heightmap.getWidth(), ih = s.heightmap.getHeight();
       int iu = Math.min(iw - 1, Math.max(0, (int)(u * iw)));
       int iv = Math.min(ih - 1, Math.max(0, (int)(v * ih)));
-      int rgba = s.heightmap.getPixel(iu, iv);
-      float r = ((rgba >>> 24) & 0xff) / 255f;
-      float g = ((rgba >>> 16) & 0xff) / 255f;
-      float b = ((rgba >>> 8)  & 0xff) / 255f;
-      float lum = (r + g + b) / 3f;
-      float edgeX = smoothstep01(1f - ax);
-      float edgeZ = smoothstep01(1f - az);
-      float edge = edgeX * edgeZ;
-      float shapedEdge = lerp(edge, (float)Math.pow(edge, 2.2f), clamp01(s.edgeFalloff));
-      total += s.intensity * 2f * lum * shapedEdge;
+      float lum = sampleLumBilinear(s.heightmap, u, v);
+      float ff = clamp01(s.edgeFalloff);
+      float t = Math.max(Math.abs(rx) / Math.max(1e-6f, s.halfW), Math.abs(rz) / Math.max(1e-6f, s.halfH));
+      float bandStart = 1f - ff;
+      float denom = Math.max(1e-6f, 1f - bandStart);
+      float s2 = clamp01((t - bandStart) / denom);
+      float shapedEdge = 1f - smoothstep01(s2);
+      total += 2 * s.intensity * lum * shapedEdge;
     }
     return total;
   }
@@ -702,6 +700,34 @@ public class EditorScreen implements Screen {
   private static float clamp01(float v) { return v < 0f ? 0f : (v > 1f ? 1f : v); }
   private static float smoothstep01(float x){ float t = clamp01(x); return t*t*(3f - 2f*t); }
   private static float lerp(float a, float b, float t){ return a + (b - a) * t; }
+
+  // Bilinear grayscale luminance sampling used by mountain preview
+  private static float sampleLumBilinear(com.badlogic.gdx.graphics.Pixmap pm, float u, float v) {
+    if (pm == null) return 0f;
+    int iw = pm.getWidth();
+    int ih = pm.getHeight();
+    if (iw <= 0 || ih <= 0) return 0f;
+    float fx = Math.max(0f, Math.min(iw - 1f, u * (iw - 1)));
+    float fy = Math.max(0f, Math.min(ih - 1f, v * (ih - 1)));
+    int x0 = (int)Math.floor(fx), x1 = Math.min(iw - 1, x0 + 1);
+    int y0 = (int)Math.floor(fy), y1 = Math.min(ih - 1, y0 + 1);
+    float tx = fx - x0, ty = fy - y0;
+    int p00 = pm.getPixel(x0, y0);
+    int p10 = pm.getPixel(x1, y0);
+    int p01 = pm.getPixel(x0, y1);
+    int p11 = pm.getPixel(x1, y1);
+    float r00 = ((p00 >>> 24) & 0xff) / 255f; float g00 = ((p00 >>> 16) & 0xff) / 255f; float b00 = ((p00 >>> 8) & 0xff) / 255f;
+    float r10 = ((p10 >>> 24) & 0xff) / 255f; float g10 = ((p10 >>> 16) & 0xff) / 255f; float b10 = ((p10 >>> 8) & 0xff) / 255f;
+    float r01 = ((p01 >>> 24) & 0xff) / 255f; float g01 = ((p01 >>> 16) & 0xff) / 255f; float b01 = ((p01 >>> 8) & 0xff) / 255f;
+    float r11 = ((p11 >>> 24) & 0xff) / 255f; float g11 = ((p11 >>> 16) & 0xff) / 255f; float b11 = ((p11 >>> 8) & 0xff) / 255f;
+    float l00 = (r00 + g00 + b00) / 3f;
+    float l10 = (r10 + g10 + b10) / 3f;
+    float l01 = (r01 + g01 + b01) / 3f;
+    float l11 = (r11 + g11 + b11) / 3f;
+    float lx0 = l00 + (l10 - l00) * tx;
+    float lx1 = l01 + (l11 - l01) * tx;
+    return lx0 + (lx1 - lx0) * ty;
+  }
 
   @Override public void resize(int w, int h) {
     cam.viewportWidth = w; cam.viewportHeight = h; cam.update();
