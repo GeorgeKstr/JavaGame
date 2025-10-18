@@ -14,9 +14,11 @@ import com.badlogic.gdx.math.Matrix4;
 
 public final class WalkLayer extends BaseToolLayer {
   private final Skin skin;
+  private final TerrainSystem terrain;
   public WalkLayer(TerrainSystem terrain, Skin skin, FpsCameraController fpsCam) {
     super("walk", "Walk");
     this.skin = skin;
+    this.terrain = terrain;
 
     // Roam tool: FPS movement (no placement)
     RoamTool roam = new RoamTool();
@@ -108,7 +110,12 @@ public final class WalkLayer extends BaseToolLayer {
 
   private float terrainHeight(Camera cam, float x, float z){
     try {
-      // Sample ground via EditorMarkerPass pattern: use terrain sampler if available later; fallback 0
+      if (terrain != null) {
+        // Use current camera Y as hint for continuity
+        float hintY = (cam != null ? cam.position.y : 0f);
+        float h = terrain.heightAt(x, z, hintY);
+        if (!Float.isNaN(h) && h != Float.NEGATIVE_INFINITY) return h;
+      }
       return 0f;
     } catch (Throwable ignored) { return 0f; }
   }

@@ -13,9 +13,11 @@ import com.example.game.World.Splines.TerrainSplineNode;
 import com.example.game.World.TerrainSystem;
 import com.example.game.World.Editor.Render.SplineRibbonRenderer;
 import com.example.game.World.Editor.Render.RenderMode;
+import com.example.game.World.AABB;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Function;
 
 public final class SplinesLayer extends BaseToolLayer {
   private final TerrainSystem terrain;
@@ -167,13 +169,25 @@ public final class SplinesLayer extends BaseToolLayer {
         .append(",\"nodes\":[");
       java.util.List<com.example.game.World.Splines.TerrainSplineNode> nodes = s.getNodes();
       for (int j=0;j<nodes.size();j++) {
-        var n = nodes.get(j).pos;
+        var node = nodes.get(j);
+        var n = node.pos;
         if (j>0) sb.append(',');
         sb.append('{')
           .append("\"x\":").append(n.x)
           .append(",\"y\":").append(n.y)
-          .append(",\"z\":").append(n.z)
-          .append('}');
+          .append(",\"z\":").append(n.z);
+        // Persist relative bounds if set (non-zero) to avoid bloating default cases
+        float rminx = node.getBMinRel().x, rminy = node.getBMinRel().y, rminz = node.getBMinRel().z;
+        float rmaxx = node.getBMaxRel().x, rmaxy = node.getBMaxRel().y, rmaxz = node.getBMaxRel().z;
+        if (!(rminx == 0f && rminy == 0f && rminz == 0f && rmaxx == 0f && rmaxy == 0f && rmaxz == 0f)) {
+          sb.append(",\"bminx\":").append(rminx)
+            .append(",\"bminy\":").append(rminy)
+            .append(",\"bminz\":").append(rminz)
+            .append(",\"bmaxx\":").append(rmaxx)
+            .append(",\"bmaxy\":").append(rmaxy)
+            .append(",\"bmaxz\":").append(rmaxz);
+        }
+        sb.append('}');
       }
       sb.append(']').append('}');
     }
@@ -210,7 +224,20 @@ public final class SplinesLayer extends BaseToolLayer {
       if (nodes != null) {
         for (com.badlogic.gdx.utils.JsonValue n : nodes) {
           float x = n.getFloat("x"); float y = n.getFloat("y"); float z = n.getFloat("z");
-          ts.addNode(new com.example.game.World.Splines.TerrainSplineNode(x, y, z));
+          com.example.game.World.Splines.TerrainSplineNode tn = new com.example.game.World.Splines.TerrainSplineNode(x, y, z);
+          boolean hasBounds = n.has("bminx") && n.has("bminy") && n.has("bminz") && n.has("bmaxx") && n.has("bmaxy") && n.has("bmaxz");
+          if (hasBounds) {
+            tn.setBMinRel(n.getFloat("bminx"), n.getFloat("bminy"), n.getFloat("bminz"));
+            tn.setBMaxRel(n.getFloat("bmaxx"), n.getFloat("bmaxy"), n.getFloat("bmaxz"));
+          } else {
+            // Apply type defaults if node lacks explicit bounds so getBoundingBox works everywhere
+            float hxz, hya, hyb;
+            if (ts.getType() == TerrainSpline.Type.RIVER) { hxz = 3.0f; hya = 2.5f; hyb = 0.5f; }
+            else { hxz = 1.0f; hya = 0.6f; hyb = 0.2f; }
+            tn.setBMinRel(-hxz, -hyb, -hxz);
+            tn.setBMaxRel( hxz,  hya,  hxz);
+          }
+          ts.addNode(tn);
         }
       }
       out.add(ts);
@@ -277,48 +304,53 @@ public final class SplinesLayer extends BaseToolLayer {
    * the nearest intersection along the ray.
    */
   public PickResult pickNodeRayAABB(Camera cam, int screenX, int screenY, float halfXZ, float halfYBelow, float halfYAbove) {
-    if (cam == null) return null;
+    return pickNodeRayBox(cam, screenX, screenY, c -> new AABB().set(
+      c.x - halfXZ, c.y - halfYBelow, c.z - halfXZ,
+      c.x + halfXZ, c.y + halfYAbove, c.z + halfXZ
+    ));
+  }
+
+  /**
+   * Ray-vs-box pick using a box builder per node center. The builder receives the node center and must
+   * return an AABB in world-space for that node.
+   */
+  public PickResult pickNodeRayBox(Camera cam, int screenX, int screenY, Function<Vector3, AABB> boxAtCenter) {
+    if (cam == null || boxAtCenter == null) return null;
     Ray ray = cam.getPickRay(screenX, screenY);
     TerrainSpline bestS = null; int bestIdx = -1; float bestT = Float.POSITIVE_INFINITY;
-    Vector3 min = new Vector3(); Vector3 max = new Vector3();
     java.util.List<TerrainSpline> iter; synchronized (splines) { iter = new java.util.ArrayList<>(splines); }
     for (TerrainSpline s : iter) {
       List<TerrainSplineNode> nodes = s.getNodes();
       for (int i = 0; i < nodes.size(); i++) {
         Vector3 c = nodes.get(i).pos;
-        min.set(c.x - halfXZ, c.y - halfYBelow, c.z - halfXZ);
-        max.set(c.x + halfXZ, c.y + halfYAbove, c.z + halfXZ);
-        float t = rayAabb(ray, min, max);
+        AABB box = boxAtCenter.apply(c);
+        if (box == null) continue;
+        float t = box.intersectRayT(ray);
         if (t >= 0f && t < bestT) { bestT = t; bestS = s; bestIdx = i; }
       }
     }
     return (bestS != null) ? new PickResult(bestS, bestIdx) : null;
   }
 
-  // Slab method for ray-AABB. Returns t of entry if hit, else -1.
-  private static float rayAabb(Ray r, Vector3 bmin, Vector3 bmax) {
-    float tmin = (bmin.x - r.origin.x) / r.direction.x;
-    float tmax = (bmax.x - r.origin.x) / r.direction.x;
-    if (tmin > tmax) { float tmp = tmin; tmin = tmax; tmax = tmp; }
-
-    float tymin = (bmin.y - r.origin.y) / r.direction.y;
-    float tymax = (bmax.y - r.origin.y) / r.direction.y;
-    if (tymin > tymax) { float tmp = tymin; tymin = tymax; tymax = tmp; }
-
-    if (tmin > tymax || tymin > tmax) return -1f;
-    if (tymin > tmin) tmin = tymin;
-    if (tymax < tmax) tmax = tymax;
-
-    float tzmin = (bmin.z - r.origin.z) / r.direction.z;
-    float tzmax = (bmax.z - r.origin.z) / r.direction.z;
-    if (tzmin > tzmax) { float tmp = tzmin; tzmin = tzmax; tzmax = tmp; }
-
-    if (tmin > tzmax || tzmin > tmax) return -1f;
-    if (tzmin > tmin) tmin = tzmin;
-    if (tzmax < tmax) tmax = tzmax;
-
-    return tmax < 0f ? -1f : (tmin >= 0f ? tmin : tmax);
+  /** Ray-vs-AABB pick using each node's own half extents. Falls back to type defaults if not set. */
+  public PickResult pickNodeRayNodes(Camera cam, int screenX, int screenY) {
+    if (cam == null) return null;
+    Ray ray = cam.getPickRay(screenX, screenY);
+    TerrainSpline bestS = null; int bestIdx = -1; float bestT = Float.POSITIVE_INFINITY;
+    java.util.List<TerrainSpline> iter; synchronized (splines) { iter = new java.util.ArrayList<>(splines); }
+    for (TerrainSpline s : iter) {
+      List<TerrainSplineNode> nodes = s.getNodes();
+      for (int i = 0; i < nodes.size(); i++) {
+        TerrainSplineNode n = nodes.get(i);
+        AABB box = n.getBoundingBox();
+        float t = (box != null) ? box.intersectRayT(ray) : -1f;
+        if (t >= 0f && t < bestT) { bestT = t; bestS = s; bestIdx = i; }
+      }
+    }
+    return (bestS != null) ? new PickResult(bestS, bestIdx) : null;
   }
+
+ 
 
   /** 3D box pick around node position. Half extents are in meters. */
   public PickResult pickNodeBox(float worldX, float worldY, float worldZ, float halfXZ, float halfY) {

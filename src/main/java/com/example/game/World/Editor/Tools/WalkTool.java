@@ -71,7 +71,9 @@ public final class WalkTool implements Tool {
       int idx = listUI.getSelectedIndex(); if (idx < 0 || idx >= nodes.size()) return;
       Node n = nodes.get(idx);
       FpsCameraController.State s = new FpsCameraController.State();
-      s.pos.set(n.x, 0f, n.z); s.yawDeg = 0f; s.pitchDeg = 0f; s.eyeHeight = n.eye;
+      float hintY = EditorContext.getCamera() != null ? EditorContext.getCamera().position.y : 0f;
+      float h = 0f; try { if (terrain != null) h = terrain.heightAt(n.x, n.z, hintY); } catch (Throwable ignored) {}
+      s.pos.set(n.x, h, n.z); s.yawDeg = 0f; s.pitchDeg = 0f; s.eyeHeight = n.eye;
       fps.setState(s);
     }));
 

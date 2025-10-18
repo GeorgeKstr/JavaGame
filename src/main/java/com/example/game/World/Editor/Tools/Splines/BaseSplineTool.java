@@ -40,7 +40,7 @@ public abstract class BaseSplineTool implements Tool {
       // Ray-AABB pick using screen coords
       int sx = Gdx.input.getX();
       int sy = Gdx.input.getY();
-      var pick = layer.pickNodeRayAABB(EditorContext.getCamera(), sx, sy, pickHalfXZ(), pickHalfYBelow(), pickHalfYAbove());
+      var pick = layer.pickNodeRayNodes(EditorContext.getCamera(), sx, sy);
       // Only allow selecting splines of the type handled by this tool
       if (pick != null && pick.spline.getType() == handledType()) {
         layer.select(pick.spline, pick.nodeIndex);
@@ -101,7 +101,11 @@ public abstract class BaseSplineTool implements Tool {
     float y = baseY + off + 0.05f;
     if (spline == null || spline.getType() != handledType() || layer.getSelectedNode() < 0) {
       if (spline == null) spline = layer.createSpline(handledType());
-      spline.addNode(new TerrainSplineNode(world.x, y, world.z));
+      TerrainSplineNode nn = new TerrainSplineNode(world.x, y, world.z);
+      float hxz = pickHalfXZ(); float hyb = pickHalfYBelow(); float hya = pickHalfYAbove();
+      nn.setBMinRel(-hxz, -hyb, -hxz);
+      nn.setBMaxRel( hxz,  hya,  hxz);
+      spline.addNode(nn);
       layer.select(spline, spline.size()-1);
       EditorContext.setSelectedPlaceable(spline);
       spline.markRibbonDirty();
@@ -134,7 +138,11 @@ public abstract class BaseSplineTool implements Tool {
     }
 
     insertAt = Math.max(0, Math.min(insertAt, spline.size()));
-    spline.insertNode(insertAt, new TerrainSplineNode(world.x, y, world.z));
+    TerrainSplineNode ins = new TerrainSplineNode(world.x, y, world.z);
+    float hxz2 = pickHalfXZ(); float hyb2 = pickHalfYBelow(); float hya2 = pickHalfYAbove();
+    ins.setBMinRel(-hxz2, -hyb2, -hxz2);
+    ins.setBMaxRel( hxz2,  hya2,  hxz2);
+    spline.insertNode(insertAt, ins);
     layer.select(spline, insertAt);
     EditorContext.setSelectedPlaceable(spline);
     spline.markRibbonDirty();

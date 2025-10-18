@@ -3,6 +3,7 @@ package com.example.game.World.Editor;
 import com.badlogic.gdx.graphics.Camera;
 import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Vector3;
+import com.example.game.World.HeightSampler;
 
 /** Simple FPS-style camera controller (yaw/pitch + WASD) with eye height. */
 public final class FpsCameraController {
@@ -12,6 +13,7 @@ public final class FpsCameraController {
   private float moveSpeed = 6.0f; // m/s
   private float mouseSens = 0.2f; // deg per pixel
   private float eyeHeight = 1.7f;
+  private HeightSampler heightSampler; // optional ground sampler
 
   // Scratch
   private final Vector3 fwd = new Vector3();
@@ -38,7 +40,7 @@ public final class FpsCameraController {
   }
 
   public void look(float dx, float dy) {
-    yawDeg   -= dx * mouseSens;
+    yawDeg   += dx * mouseSens;
     pitchDeg -= dy * mouseSens;
     pitchDeg = MathUtils.clamp(pitchDeg, -89f, 89f);
   }
@@ -61,6 +63,8 @@ public final class FpsCameraController {
 
   public void setMoveSpeed(float mps) { moveSpeed = Math.max(0.1f, mps); }
   public void setEyeHeight(float meters) { eyeHeight = Math.max(0.1f, meters); }
+  /** Provide a ground sampler so the camera follows terrain (y = ground + eye). */
+  public void setHeightSampler(HeightSampler sampler) { this.heightSampler = sampler; }
 
   public void update(Camera cam) {
     // Direction from yaw/pitch
@@ -72,7 +76,14 @@ public final class FpsCameraController {
       MathUtils.sin(pitchRad),
       -MathUtils.cos(yawRad) * cp
     ).nor();
-    cam.position.set(pos.x, eyeHeight, pos.z);
+    float groundY = 0f;
+    boolean haveGround = false;
+    if (heightSampler != null) {
+      float hint = cam != null ? cam.position.y : (pos.y + eyeHeight);
+      float h = heightSampler.heightAt(pos.x, pos.z, hint);
+      if (!Float.isNaN(h) && h != Float.NEGATIVE_INFINITY) { groundY = h; haveGround = true; }
+    }
+    cam.position.set(pos.x, (haveGround ? groundY + eyeHeight : eyeHeight), pos.z);
     cam.direction.set(dir);
     cam.up.set(Vector3.Y);
     cam.update(true);

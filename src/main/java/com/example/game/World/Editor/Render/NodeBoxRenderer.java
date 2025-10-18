@@ -38,20 +38,26 @@ public final class NodeBoxRenderer implements Renderable {
       List<TerrainSplineNode> nodes = s.getNodes();
       boolean selSpline = (s == layer.getSelectedSpline());
 
-      // Box half extents vary slightly by spline type to match existing tools
-      float halfXZ, halfYAbove, halfYBelow;
-      if (s.getType() == TerrainSpline.Type.RIVER) {
-        halfXZ = 3.0f; halfYAbove = 2.5f; halfYBelow = 0.5f;
-      } else { // ROAD
-        halfXZ = 1.0f; halfYAbove = 0.6f; halfYBelow = 0.2f;
-      }
-
       for (int k = 0; k < nodes.size(); k++) {
-        Vector3 p = nodes.get(k).pos;
-        float y0 = p.y - halfYBelow;
-        float y1 = p.y + halfYAbove;
-        float x0 = p.x - halfXZ, x1 = p.x + halfXZ;
-        float z0 = p.z - halfXZ, z1 = p.z + halfXZ;
+        TerrainSplineNode n = nodes.get(k);
+        Vector3 p = n.pos;
+        // Relative box from node; if zero, use type defaults (symmetric)
+        float rminx = n.getBMinRel().x, rminy = n.getBMinRel().y, rminz = n.getBMinRel().z;
+        float rmaxx = n.getBMaxRel().x, rmaxy = n.getBMaxRel().y, rmaxz = n.getBMaxRel().z;
+        boolean unset = (rminx == 0f && rminy == 0f && rminz == 0f && rmaxx == 0f && rmaxy == 0f && rmaxz == 0f);
+        if (unset) {
+          float hxz, hya, hyb;
+          if (s.getType() == TerrainSpline.Type.RIVER) { hxz = 3.0f; hya = 2.5f; hyb = 0.5f; }
+          else { hxz = 1.0f; hya = 0.6f; hyb = 0.2f; }
+          rminx = -hxz; rminy = -hyb; rminz = -hxz;
+          rmaxx = hxz;  rmaxy = hya;  rmaxz = hxz;
+        }
+        float x0 = p.x + Math.min(rminx, rmaxx);
+        float y0 = p.y + Math.min(rminy, rmaxy);
+        float z0 = p.z + Math.min(rminz, rmaxz);
+        float x1 = p.x + Math.max(rminx, rmaxx);
+        float y1 = p.y + Math.max(rminy, rmaxy);
+        float z1 = p.z + Math.max(rminz, rmaxz);
 
         int selIdx = layer.getSelectedNode();
         float cr, cg, cb, ca;

@@ -116,6 +116,8 @@ public final class MountainTool implements Tool {
 
         float originX = cx * chunkSize;
         float originZ = cz * chunkSize;
+        // Snapshot base heights to compose deltas like MountainBakePostProcessor
+        short[] baseHeights = java.util.Arrays.copyOf(heights, heights.length);
 
         // Iterate overlap region inside this chunk
         int x0 = Math.max(0, (int)Math.floor((cxw - radius - originX) / tile));
@@ -147,19 +149,23 @@ public final class MountainTool implements Tool {
                 float v = (rz * 0.5f / n.halfH) + 0.5f;
                 float lum = sampleLumBilinear(n.heightmap, u, v);
                 float ff = Math.max(0f, Math.min(1f, n.edgeFalloff));
-                float t = Math.max(ax, az);
+                // Superellipse metric for rounder ramps (consistent with MountainBakePostProcessor)
+                float p = 2.5f;
+                float t = (float)Math.pow(Math.pow(ax, p) + Math.pow(az, p), 1.0 / p);
                 float bandStart = 1f - ff;
                 float denom = Math.max(1e-6f, 1f - bandStart);
                 float s2 = Math.max(0f, Math.min(1f, (t - bandStart) / denom));
                 float shapedEdge = 1f - (s2*s2*(3f - 2f*s2));
-                deltaMetersAvg += n.intensity * lum * shapedEdge;
+                float sign = (selected != null && selected.inverted) ? -1f : 1f;
+                deltaMetersAvg += sign * n.intensity * lum * shapedEdge;
               }
             }
             deltaMetersAvg *= (1f / 16f); // average of 16 sub-samples
-            if (selected != null && selected.inverted) deltaMetersAvg = -deltaMetersAvg;
             int idx = gz * S + gx;
             int deltaUnits = Math.round(deltaMetersAvg / Math.max(1e-6f, yScale));
-            int nv = heights[idx] + deltaUnits;
+            int base = baseHeights[idx];
+            int preserved = heights[idx] - base; // retain any prior post-processor deltas
+            int nv = base + preserved + deltaUnits;
             if (nv < Short.MIN_VALUE) nv = Short.MIN_VALUE; else if (nv > Short.MAX_VALUE) nv = Short.MAX_VALUE;
             heights[idx] = (short)nv;
           }
@@ -243,11 +249,7 @@ public final class MountainTool implements Tool {
       shader = new ShaderProgram(vert, frag);
       if (!shader.isCompiled()) throw new IllegalStateException("MountainTool shader: "+shader.getLog());
     }
-    // Install refresh-bake post-processor once; supplier reflects current mountains list
-    if (!postInstalled) {
-      terrain.addChunkHeightPostProcessor(new TerrainSystem.MountainBakePostProcessor(() -> buildStampsFromNodes()));
-      postInstalled = true;
-    }
+    // Post-processor is installed centrally in EditorScreen to avoid duplication
     // Load from map if present (only once on first selection)
     if (nodes.isEmpty()) {
       try { loadMountainsFromMap(); rebuildNodeList(); } catch (Throwable ignored) {}
@@ -383,11 +385,23 @@ public final class MountainTool implements Tool {
         javax.swing.JFileChooser fc = new javax.swing.JFileChooser();
         fc.setDialogTitle("Import Heightmap");
         fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Images", "png", "jpg", "jpeg", "bmp"));
-        if (lastImageDir != null) fc.setCurrentDirectory(new java.io.File(lastImageDir));
+        try {
+          // Persisted last dir
+          com.badlogic.gdx.Preferences prefs = com.badlogic.gdx.Gdx.app != null ? com.badlogic.gdx.Gdx.app.getPreferences("editor_prefs") : null;
+          String persisted = (prefs != null ? prefs.getString("lastHeightmapDir", null) : null);
+          String startDir = (lastImageDir != null ? lastImageDir : persisted);
+          if (startDir != null) fc.setCurrentDirectory(new java.io.File(startDir));
+        } catch (Throwable ignored) {}
         if (fc.showOpenDialog(null) == javax.swing.JFileChooser.APPROVE_OPTION) {
           abs[0] = fc.getSelectedFile().getAbsolutePath();
           java.io.File sel = fc.getSelectedFile();
-          if (sel != null && sel.getParent() != null) lastImageDir = sel.getParent();
+          if (sel != null && sel.getParent() != null) {
+            lastImageDir = sel.getParent();
+            try {
+              com.badlogic.gdx.Preferences prefs = com.badlogic.gdx.Gdx.app != null ? com.badlogic.gdx.Gdx.app.getPreferences("editor_prefs") : null;
+              if (prefs != null) { prefs.putString("lastHeightmapDir", lastImageDir); prefs.flush(); }
+            } catch (Throwable ignored) {}
+          }
         }
       });
     } catch (Exception ignored) {}

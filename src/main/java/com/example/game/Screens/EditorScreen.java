@@ -492,6 +492,8 @@ public class EditorScreen implements Screen {
     this.edCam.setLockPivotYZero(true);
     // FPS controller init
     this.fpsCam = new com.example.game.World.Editor.FpsCameraController();
+    // Make FPS camera follow ground (y = terrain height + eye)
+    this.fpsCam.setHeightSampler(terrain);
     // Seed states
     this.rtsState = edCam.getState();
     this.fpsState = fpsCam.getState();
@@ -728,16 +730,30 @@ public class EditorScreen implements Screen {
     }
     if (Gdx.input.isKeyJustPressed(Input.Keys.F2)) {
       // switching to walk: save rts, restore fps; capture only if Roam is active
-      this.rtsState = edCam.getState(); fpsCam.setState(fpsState);
-      layers.setActive("walk"); hud.rebuildLeftPane(layers);
-      boolean roamNow = false;
-      var al = layers.active();
-      if (al != null && "walk".equals(al.id()) && al instanceof com.example.game.World.Editor.BaseToolLayer) {
-        var t = ((com.example.game.World.Editor.BaseToolLayer)al).getActiveTool();
+      this.rtsState = edCam.getState();
+      // Adjust FPS state Y to terrain before applying
+      try {
+        if (terrain != null && fpsState != null && fpsState.pos != null) {
+          float gx = fpsState.pos.x, gz = fpsState.pos.z, gy = fpsState.pos.y;
+          float gyNew = terrain.heightAt(gx, gz, gy);
+          if (!Float.isNaN(gyNew) && gyNew != Float.NEGATIVE_INFINITY) fpsState.pos.y = gyNew;
+        }
+      } catch (Throwable ignored) {}
+      fpsCam.setState(fpsState);
+      this.fpsState = fpsCam.getState();
+      com.example.game.World.Editor.EditorLayer al = layers.active();
+      boolean walk = (al != null && "walk".equals(al.id()) && al instanceof com.example.game.World.Editor.BaseToolLayer);
+      if (walk) {
+        com.example.game.World.Editor.Tools.Tool t = ((com.example.game.World.Editor.BaseToolLayer)al).getActiveTool();
         String tn = (t == null ? "" : t.name());
-        roamNow = "Roam".equals(tn);
+        Gdx.input.setCursorCatched("Roam".equals(tn));
+      } else {
+        layers.setActive("walk");
+        hud.rebuildLeftPane(layers);
+        com.example.game.World.Editor.Tools.Tool t = ((com.example.game.World.Editor.BaseToolLayer)layers.active()).getActiveTool();
+        String tn = (t == null ? "" : t.name());
+        Gdx.input.setCursorCatched("Roam".equals(tn));
       }
-      Gdx.input.setCursorCatched(roamNow);
     }
     if (Gdx.input.isKeyJustPressed(Input.Keys.F3)) {
       com.example.game.World.Editor.EditorLayer cur = layers.active();

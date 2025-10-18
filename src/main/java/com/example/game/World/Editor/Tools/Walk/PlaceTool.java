@@ -67,10 +67,12 @@ public final class PlaceTool implements Tool {
     // Wire actions
     add.addListener(com.example.game.UI.SkinFactory.onClick(() -> {
       if(selectedIndex < 0 || selectedIndex >= nodes.size()) return;
-      System.out.println("Selected index: " + selectedIndex + " (" + nodes.size() + " nodes)");
       Node n = nodes.get(selectedIndex);
       Camera cam = EditorContext.getCamera(); if (cam == null) return;
-      cam.position.set(n.x, 0f, n.z);
+      float hintY = cam.position.y;
+      float h = 0f;
+      try { if (terrain != null) h = terrain.heightAt(n.x, n.z, hintY); } catch (Throwable ignored) {}
+      cam.position.set(n.x, h, n.z);
     }));
 
     del.addListener(com.example.game.UI.SkinFactory.onClick(() -> {
@@ -81,7 +83,10 @@ public final class PlaceTool implements Tool {
       int idx = listUI.getSelectedIndex(); if (idx < 0 || idx >= nodes.size()) return;
       Node n = nodes.get(idx);
       FpsCameraController.State s = new FpsCameraController.State();
-      s.pos.set(n.x, 0f, n.z); s.yawDeg = 0f; s.pitchDeg = 0f; s.eyeHeight = n.eye;
+      float hintY = EditorContext.getCamera() != null ? EditorContext.getCamera().position.y : 0f;
+      float h = 0f;
+      try { if (terrain != null) h = terrain.heightAt(n.x, n.z, hintY); } catch (Throwable ignored) {}
+      s.pos.set(n.x, h, n.z); s.yawDeg = 0f; s.pitchDeg = 0f; s.eyeHeight = n.eye;
       if (onTeleport != null) onTeleport.accept(s);
       if (onSwitchToRoam != null) onSwitchToRoam.run();
     }));
@@ -93,8 +98,10 @@ public final class PlaceTool implements Tool {
       if (selectedIndex >= 0 && selectedIndex < nodes.size()) {
         Camera cam = EditorContext.getCamera();
         if (cam != null) {
-          Vector3 pos = nodes.get(selectedIndex).getPosition();
-          cam.position.set(pos.x, pos.y, pos.z);
+          Node n = nodes.get(selectedIndex);
+          float hintY = cam.position.y;
+          float h = 0f; try { if (terrain != null) h = terrain.heightAt(n.x, n.z, hintY); } catch (Throwable ignored) {}
+          cam.position.set(n.x, h, n.z);
         }
       }
     }});
