@@ -53,148 +53,269 @@ public final class MountainTool implements Tool {
   private DragMode dragMode = DragMode.NONE;
   private float dragStartX, dragStartZ;
   private Node draggingNode;
+  // Stable resize frame
+  private final Vector3 dragC0 = new Vector3();
+  private float dragHalfW0, dragHalfH0, dragRot0;
+  private final Vector3 dragXw = new Vector3();
+  private final Vector3 dragZw = new Vector3();
+  private final Vector3 dragAnchor = new Vector3();
 
   public MountainTool(TerrainSystem terrain) {
     this.terrain = terrain;
-    // Stage latest mountains on chunk changes (so a following save writes them)
-    this.terrain.addChunksChangedListener(() -> { try { saveMountainsToMap(); } catch (Throwable ignored) {} });
   }
+
+  /** Programmatic import: create a node from a given heightmap pixmap. */
+  public void addImportedPixmap(com.badlogic.gdx.graphics.Pixmap pm,
+                                String imageName,
+                                float centerX, float centerZ,
+                                float halfW, float halfH,
+                                float rotationDeg,
+                                float intensity,
+                                float edgeFalloff,
+                                boolean inverted) {
+    if (pm == null) return;
+    Node n = new Node();
+    n.heightmap = pm; n.preview = new Texture(pm);
+    n.preview.setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
+    n.preview.setWrap(Texture.TextureWrap.ClampToEdge, Texture.TextureWrap.ClampToEdge);
+    n.imageName = (imageName == null ? "captured.png" : imageName);
+    n.center.set(centerX, 0f, centerZ);
+    n.halfW = Math.max(1f, halfW);
+    n.halfH = Math.max(1f, halfH);
+    n.rotationDeg = rotationDeg;
+    n.intensity = Math.max(0.001f, intensity);
+    n.edgeFalloff = Math.max(0f, Math.min(1f, edgeFalloff));
+    n.inverted = inverted;
+    nodes.add(n);
+    select(n);
+    rebuildNodeList();
+    saveMountainsToMap();
+  }
+
+  /** Remove any existing nodes that overlap the given rectangle in world space; returns removed count. */
+  public int removeNodesOverlapping(float cx, float cz, float halfW, float halfH, float rotDeg, float marginMeters) {
+    if (nodes.isEmpty()) return 0;
+    float s = com.badlogic.gdx.math.MathUtils.sinDeg(rotDeg), c = com.badlogic.gdx.math.MathUtils.cosDeg(rotDeg);
+    java.util.Iterator<Node> it = nodes.iterator();
+    int removed = 0;
+    while (it.hasNext()) {
+      Node n = it.next();
+      if (rectsOverlap(cx, cz, halfW, halfH, s, c, n)) { it.remove(); removed++; }
+    }
+    if (removed > 0) { select(null); rebuildNodeList(); saveMountainsToMap(); }
+    return removed;
+  }
+
+  private static boolean rectsOverlap(float cx, float cz, float hw, float hh, float s, float c, Node n) {
+    // Quick radius test
+    float rA = (float)Math.hypot(hw, hh);
+    float rB = (float)Math.hypot(n.halfW, n.halfH);
+    float dx = (n.center.x - cx), dz = (n.center.z - cz);
+    if (dx*dx + dz*dz > (rA + rB) * (rA + rB)) return false;
+    // SAT on 2D OBBs (XZ)
+    float s1 = s, c1 = c;
+    float s2 = com.badlogic.gdx.math.MathUtils.sinDeg(n.rotationDeg), c2 = com.badlogic.gdx.math.MathUtils.cosDeg(n.rotationDeg);
+    // Axes (unit) for both boxes
+    float ax1x = c1, ax1z = s1; // local X axis of A in world
+    float az1x = -s1, az1z = c1; // local Z axis of A in world
+    float ax2x = c2, ax2z = s2;
+    float az2x = -s2, az2z = c2;
+    // Vector between centers
+    float tx = n.center.x - cx, tz = n.center.z - cz;
+    // Projections of half-extents onto each axis
+    // Test axes: ax1, az1, ax2, az2
+    if (separatedOnAxis(tx, tz, ax1x, ax1z, hw, hh, ax2x, ax2z, n.halfW, n.halfH)) return false;
+    if (separatedOnAxis(tx, tz, az1x, az1z, hw, hh, ax2x, ax2z, n.halfW, n.halfH)) return false;
+    if (separatedOnAxis(tx, tz, ax2x, ax2z, hw, hh, ax2x, ax2z, n.halfW, n.halfH, ax1x, ax1z, az1x, az1z)) return false;
+    if (separatedOnAxis(tx, tz, az2x, az2z, hw, hh, ax2x, ax2z, n.halfW, n.halfH, ax1x, ax1z, az1x, az1z)) return false;
+    return true;
+  }
+
+  private static boolean separatedOnAxis(float tx, float tz, float axX, float axZ,
+                                         float aHW, float aHH,
+                                         float bxX, float bxZ, float bHW, float bHH) {
+    // Overload uses only A axes; B axes provided via bx/bz for projections
+    // Project center distance onto axis
+    float dist = Math.abs(tx * axX + tz * axZ);
+    // Radius of A on axis
+    float rA = Math.abs(aHW * (axX) + aHH * (axZ));
+    // Radius of B on axis: project its local axes onto axis and weight by half extents
+    float rB = Math.abs(bHW * (bxX * axX + bxZ * axZ)) + Math.abs(bHH * ((-bxZ) * axX + (bxX) * axZ));
+    return dist > (rA + rB);
+  }
+
+  private static boolean separatedOnAxis(float tx, float tz, float axX, float axZ,
+                                         float aHW, float aHH,
+                                         float bxX, float bxZ, float bHW, float bHH,
+                                         float ax1x, float ax1z, float az1x, float az1z) {
+    // Project center distance onto axis
+    float dist = Math.abs(tx * axX + tz * axZ);
+    // Radius of A on axis using its axes
+    float rA = Math.abs(aHW * (ax1x * axX + ax1z * axZ)) + Math.abs(aHH * (az1x * axX + az1z * axZ));
+    // Radius of B on axis using its axes
+    float rB = Math.abs(bHW * (bxX * axX + bxZ * axZ)) + Math.abs(bHH * ((-bxZ) * axX + (bxX) * axZ));
+    return dist > (rA + rB);
+  }
+
+  private static float[] cornersX(float cx, float cz, float hw, float hh, float s, float c){
+    float[] lx = { -hw,  hw,  hw, -hw };
+    float[] lz = { -hh, -hh,  hh,  hh };
+    float[] wx = new float[4];
+    for (int i=0;i<4;i++){ float rx =  lx[i]*c - lz[i]*s; float rz =  lx[i]*s + lz[i]*c; wx[i] = cx + rx; }
+    return wx;
+  }
+  private static float[] cornersZ(float cx, float cz, float hw, float hh, float s, float c){
+    float[] lx = { -hw,  hw,  hw, -hw };
+    float[] lz = { -hh, -hh,  hh,  hh };
+    float[] wz = new float[4];
+    for (int i=0;i<4;i++){ float rx =  lx[i]*c - lz[i]*s; float rz =  lx[i]*s + lz[i]*c; wz[i] = cz + rz; }
+    return wz;
+  }
+  private static float min4(float[] v){ return Math.min(Math.min(v[0], v[1]), Math.min(v[2], v[3])); }
+  private static float max4(float[] v){ return Math.max(Math.max(v[0], v[1]), Math.max(v[2], v[3])); }
 
   // Apply the currently selected mountain into baseline HMXS across all affected chunks, save, and remove node
   private void makeSelectedPermanent() {
     if (terrain == null || selected == null || selected.heightmap == null) return;
+    // Show non-blocking loading overlay in the editor while baking and reloading
+    com.example.game.World.Editor.EditorContext.requestRefresh("Baking heightmap...");
     var map = terrain.getMap();
     var mf = map.getManifest();
     final int S = mf.samplesPerSide;
     final float tile = mf.tile;
     final float yScale = terrain.getYScale();
 
+    // Capture current selection and ranges on main thread
     Node n = selected;
-    float cxw = n.center.x, czw = n.center.z;
-    float radius = (float)Math.hypot(n.halfW, n.halfH);
+    final float cxw = n.center.x, czw = n.center.z;
+    final float radius = (float)Math.hypot(n.halfW, n.halfH);
     int cpc = S - 1;
-    float chunkSize = cpc * tile;
-    int minCx = (int)Math.floor((cxw - radius) / chunkSize);
-    int maxCx = (int)Math.floor((cxw + radius) / chunkSize);
-    int minCz = (int)Math.floor((czw - radius) / chunkSize);
-    int maxCz = (int)Math.floor((czw + radius) / chunkSize);
+    final float chunkSize = cpc * tile;
+    final int minCx = (int)Math.floor((cxw - radius) / chunkSize);
+    final int maxCx = (int)Math.floor((cxw + radius) / chunkSize);
+    final int minCz = (int)Math.floor((czw - radius) / chunkSize);
+    final int maxCz = (int)Math.floor((czw + radius) / chunkSize);
 
-    java.util.Map<String, byte[]> toWrite = new java.util.LinkedHashMap<>();
-
-    // Precompute rotation and inverses
-    float sin = (float)Math.sin(Math.toRadians(n.rotationDeg));
-    float cos = (float)Math.cos(Math.toRadians(n.rotationDeg));
-    float invHalfW = 1f / Math.max(1e-6f, n.halfW);
-    float invHalfH = 1f / Math.max(1e-6f, n.halfH);
-
+    // Snapshot existing HMXS bytes for the affected chunks on main thread to avoid thread-safety issues
+    java.util.Map<String, byte[]> rawByChunk = new java.util.LinkedHashMap<>();
     for (int cz = minCz; cz <= maxCz; cz++) {
       for (int cx = minCx; cx <= maxCx; cx++) {
+        byte[] raw = map.readChunkHmx(cx, cz);
+        rawByChunk.put(cx + ":" + cz, (raw == null ? null : java.util.Arrays.copyOf(raw, raw.length)));
         boolean listed = false;
         for (int[] c : mf.chunks) { if (c != null && c.length >= 2 && c[0]==cx && c[1]==cz) { listed = true; break; } }
         if (!listed) mf.chunks.add(new int[]{cx, cz});
-        // Load existing HMXS or create blank
-        com.example.game.World.SparseChunkProvider.LoadedChunk lc;
-        byte[] raw = map.readChunkHmx(cx, cz);
-        if (raw != null && raw.length > 0) {
-          lc = new com.example.game.World.SparseChunkProvider("", S).loadFromBytes(raw);
-        } else {
-          // create empty arrays
-          int samples = S * S;
-          short[] heights = new short[samples];
-          byte[] id0 = new byte[samples];
-          byte[] id1 = new byte[samples];
-          byte[] id2 = new byte[samples];
-          byte[] w0  = new byte[samples];
-          byte[] w1  = new byte[samples];
-          byte[] w2  = new byte[samples];
-          for (int i = 0; i < samples; i++) { id0[i]=0; id1[i]=0; id2[i]=0; w0[i]=(byte)255; w1[i]=0; w2[i]=0; }
-          lc = new com.example.game.World.SparseChunkProvider.LoadedChunk(heights, id0, id1, id2, w0, w1, w2);
-        }
-
-        short[] heights = lc.heights;
-        byte[] id0 = lc.id0, id1 = lc.id1, id2 = lc.id2, w0 = lc.w0, w1 = lc.w1, w2 = lc.w2;
-
-        float originX = cx * chunkSize;
-        float originZ = cz * chunkSize;
-        // Snapshot base heights to compose deltas like MountainBakePostProcessor
-        short[] baseHeights = java.util.Arrays.copyOf(heights, heights.length);
-
-        // Iterate overlap region inside this chunk
-        int x0 = Math.max(0, (int)Math.floor((cxw - radius - originX) / tile));
-        int x1 = Math.min(S - 1, (int)Math.ceil((cxw + radius - originX) / tile));
-        int z0 = Math.max(0, (int)Math.floor((czw - radius - originZ) / tile));
-        int z1 = Math.min(S - 1, (int)Math.ceil((czw + radius - originZ) / tile));
-
-        for (int gz = z0; gz <= z1; gz++) {
-          float wz = originZ + gz * tile;
-          for (int gx = x0; gx <= x1; gx++) {
-            // 4x4 supersampling within the cell to further reduce banding
-            float wx = originX + gx * tile;
-            float deltaMetersAvg = 0f;
-            for (int sy = 0; sy < 4; sy++) {
-              for (int sx = 0; sx < 4; sx++) {
-                float fx = (sx + 0.5f) / 4f; // 0.125, 0.375, 0.625, 0.875
-                float fz = (sy + 0.5f) / 4f;
-                float ox = fx * tile;
-                float oz = fz * tile;
-                float px = wx + ox;
-                float pz = wz + oz;
-                float lx = px - cxw, lz = pz - czw;
-                float rx =  lx * cos + lz * sin;
-                float rz = -lx * sin + lz * cos;
-                float ax = Math.abs(rx) * invHalfW;
-                float az = Math.abs(rz) * invHalfH;
-                if (ax > 1f || az > 1f) continue;
-                float u = (rx * 0.5f / n.halfW) + 0.5f;
-                float v = (rz * 0.5f / n.halfH) + 0.5f;
-                float lum = sampleLumBilinear(n.heightmap, u, v);
-                float ff = Math.max(0f, Math.min(1f, n.edgeFalloff));
-                // Superellipse metric for rounder ramps (consistent with MountainBakePostProcessor)
-                float p = 2.5f;
-                float t = (float)Math.pow(Math.pow(ax, p) + Math.pow(az, p), 1.0 / p);
-                float bandStart = 1f - ff;
-                float denom = Math.max(1e-6f, 1f - bandStart);
-                float s2 = Math.max(0f, Math.min(1f, (t - bandStart) / denom));
-                float shapedEdge = 1f - (s2*s2*(3f - 2f*s2));
-                float sign = (selected != null && selected.inverted) ? -1f : 1f;
-                deltaMetersAvg += sign * n.intensity * lum * shapedEdge;
-              }
-            }
-            deltaMetersAvg *= (1f / 16f); // average of 16 sub-samples
-            int idx = gz * S + gx;
-            int deltaUnits = Math.round(deltaMetersAvg / Math.max(1e-6f, yScale));
-            int base = baseHeights[idx];
-            int preserved = heights[idx] - base; // retain any prior post-processor deltas
-            int nv = base + preserved + deltaUnits;
-            if (nv < Short.MIN_VALUE) nv = Short.MIN_VALUE; else if (nv > Short.MAX_VALUE) nv = Short.MAX_VALUE;
-            heights[idx] = (short)nv;
-          }
-        }
-
-        try {
-          byte[] blob = com.example.game.World.SparseChunkWriter.encodeToBytes(S, heights, id0, id1, id2, w0, w1, w2);
-          toWrite.put(cx + "_" + cz + ".hmx", blob);
-        } catch (Exception ex) {
-          // fail this chunk but continue others
-        }
       }
     }
 
-    // Remove node first and persist mountains.json so the deletion is included in this delta save
-    int old = selectedIndex; nodes.remove(selected); selected = null; selectedIndex = Math.min(old, nodes.size()-1); if (selectedIndex >= 0) selected = nodes.get(selectedIndex);
-    rebuildNodeList(); selLabel.setText(selected==null?"Selected: none":String.format("Selected: %s (%.1f, %.1f)",(selected.imageName==null?"-":selected.imageName), selected.center.x, selected.center.z));
-    saveMountainsToMap();
+    // Precompute rotation and inverses (immutable for the thread)
+    final float sin = (float)Math.sin(Math.toRadians(n.rotationDeg));
+    final float cos = (float)Math.cos(Math.toRadians(n.rotationDeg));
+    final float invHalfW = 1f / Math.max(1e-6f, n.halfW);
+    final float invHalfH = 1f / Math.max(1e-6f, n.halfH);
 
-    // Now delta-save chunks + staged extras (updated mountains.json)
-    if (!toWrite.isEmpty()) {
-      map.saveInPlaceDeltaIncludingStaged(toWrite);
-    } else {
-      // still write mountains.json removal even if no chunk bytes changed
-      map.saveInPlaceDeltaIncludingStaged(java.util.Collections.emptyMap());
-    }
+    // Heavy compute off the render thread
+    new Thread(() -> {
+      java.util.Map<String, byte[]> toWrite = new java.util.LinkedHashMap<>();
+      try {
+        for (int cz = minCz; cz <= maxCz; cz++) {
+          for (int cx = minCx; cx <= maxCx; cx++) {
+            byte[] raw = rawByChunk.get(cx + ":" + cz);
+            com.example.game.World.SparseChunkProvider.LoadedChunk lc;
+            if (raw != null && raw.length > 0) {
+              lc = new com.example.game.World.SparseChunkProvider("", S).loadFromBytes(raw);
+            } else {
+              int samples = S * S;
+              short[] heights = new short[samples];
+              byte[] id0 = new byte[samples];
+              byte[] id1 = new byte[samples];
+              byte[] id2 = new byte[samples];
+              byte[] w0  = new byte[samples];
+              byte[] w1  = new byte[samples];
+              byte[] w2  = new byte[samples];
+              for (int i = 0; i < samples; i++) { id0[i]=0; id1[i]=0; id2[i]=0; w0[i]=(byte)255; w1[i]=0; w2[i]=0; }
+              lc = new com.example.game.World.SparseChunkProvider.LoadedChunk(heights, id0, id1, id2, w0, w1, w2);
+            }
 
-    // Refresh terrain so baked chunks update in view
-    terrain.reloadAllChunks();
+            short[] heights = lc.heights;
+            byte[] id0 = lc.id0, id1 = lc.id1, id2 = lc.id2, w0 = lc.w0, w1 = lc.w1, w2 = lc.w2;
+            float originX = cx * chunkSize;
+            float originZ = cz * chunkSize;
+            short[] baseHeights = java.util.Arrays.copyOf(heights, heights.length);
+
+            int x0 = Math.max(0, (int)Math.floor((cxw - radius - originX) / tile));
+            int x1 = Math.min(S - 1, (int)Math.ceil((cxw + radius - originX) / tile));
+            int z0 = Math.max(0, (int)Math.floor((czw - radius - originZ) / tile));
+            int z1 = Math.min(S - 1, (int)Math.ceil((czw + radius - originZ) / tile));
+
+            for (int gz = z0; gz <= z1; gz++) {
+              float wz = originZ + gz * tile;
+              for (int gx = x0; gx <= x1; gx++) {
+                float wx = originX + gx * tile;
+                float deltaMetersAvg = 0f;
+                for (int sy = 0; sy < 4; sy++) {
+                  for (int sx = 0; sx < 4; sx++) {
+                    float fx = (sx + 0.5f) / 4f;
+                    float fz = (sy + 0.5f) / 4f;
+                    float ox = fx * tile, oz = fz * tile;
+                    float px = wx + ox, pz = wz + oz;
+                    float lx = px - cxw, lz = pz - czw;
+                    float rx =  lx * cos + lz * sin;
+                    float rz = -lx * sin + lz * cos;
+                    float ax = Math.abs(rx) * invHalfW;
+                    float az = Math.abs(rz) * invHalfH;
+                    if (ax > 1f || az > 1f) continue;
+                    float u = (rx * 0.5f / n.halfW) + 0.5f;
+                    float v = (rz * 0.5f / n.halfH) + 0.5f;
+                    float lum = sampleLumBilinear(n.heightmap, u, v);
+                    float ff = Math.max(0f, Math.min(1f, n.edgeFalloff));
+                    float p = 2.5f;
+                    float t = (float)Math.pow(Math.pow(ax, p) + Math.pow(az, p), 1.0 / p);
+                    float bandStart = 1f - ff;
+                    float denom = Math.max(1e-6f, 1f - bandStart);
+                    float s2 = Math.max(0f, Math.min(1f, (t - bandStart) / denom));
+                    float shapedEdge = 1f - (s2*s2*(3f - 2f*s2));
+                    float sign = (n != null && n.inverted) ? -1f : 1f;
+                    deltaMetersAvg += sign * n.intensity * lum * shapedEdge;
+                  }
+                }
+                deltaMetersAvg *= (1f / 16f);
+                int idx = gz * S + gx;
+                int deltaUnits = Math.round(deltaMetersAvg / Math.max(1e-6f, yScale));
+                int base = baseHeights[idx];
+                int preserved = heights[idx] - base;
+                int nv = base + preserved + deltaUnits;
+                if (nv < Short.MIN_VALUE) nv = Short.MIN_VALUE; else if (nv > Short.MAX_VALUE) nv = Short.MAX_VALUE;
+                heights[idx] = (short)nv;
+              }
+            }
+
+            try {
+              byte[] blob = com.example.game.World.SparseChunkWriter.encodeToBytes(S, heights, id0, id1, id2, w0, w1, w2);
+              toWrite.put(cx + "_" + cz + ".hmx", blob);
+            } catch (Exception ex) {
+              // continue
+            }
+          }
+        }
+      } catch (Throwable ignored) {}
+
+      // Apply results on the render thread
+      com.badlogic.gdx.Gdx.app.postRunnable(() -> {
+        // Remove node and persist mountains.json so the deletion is included in this delta save
+        int old = selectedIndex; nodes.remove(selected); selected = null; selectedIndex = Math.min(old, nodes.size()-1); if (selectedIndex >= 0) selected = nodes.get(selectedIndex);
+        rebuildNodeList(); selLabel.setText(selected==null?"Selected: none":String.format("Selected: %s (%.1f, %.1f)",(selected.imageName==null?"-":selected.imageName), selected.center.x, selected.center.z));
+        saveMountainsToMap();
+
+        if (!toWrite.isEmpty()) {
+          map.saveInPlaceDeltaIncludingStaged(toWrite);
+        } else {
+          map.saveInPlaceDeltaIncludingStaged(java.util.Collections.emptyMap());
+        }
+        // Trigger reload asynchronously to finish the flow and let the overlay close after stability
+        terrain.reloadAllChunksAsyncInPlace();
+      });
+    }, "MountainBakeThread").start();
   }
 
   private static float sampleLumBilinear(Pixmap pm, float u, float v) {
@@ -229,7 +350,7 @@ public final class MountainTool implements Tool {
     return this::buildStampsFromNodes;
   }
 
-  @Override public String name() { return "Heightmap"; }
+  @Override public String name() { return "Import"; }
 
   @Override public void onSelected() {
     if (shader == null) {
@@ -484,6 +605,17 @@ public final class MountainTool implements Tool {
       DragMode m = detectHandle(hit, mouseW.x, mouseW.z, marginMeters);
       dragMode = m;
       dragStartX = mouseW.x; dragStartZ = mouseW.z;
+      // Snapshot initial state for stable resizing
+      dragC0.set(hit.center); dragHalfW0 = hit.halfW; dragHalfH0 = hit.halfH; dragRot0 = hit.rotationDeg;
+      float s0 = MathUtils.sinDeg(dragRot0), c0 = MathUtils.cosDeg(dragRot0);
+      dragXw.set(c0, 0f, s0); dragZw.set(-s0, 0f, c0);
+      switch (dragMode) {
+        case RESIZE_L: dragAnchor.set(dragC0).mulAdd(dragXw, +dragHalfW0); break; // right edge fixed
+        case RESIZE_R: dragAnchor.set(dragC0).mulAdd(dragXw, -dragHalfW0); break; // left edge fixed
+        case RESIZE_B: dragAnchor.set(dragC0).mulAdd(dragZw, +dragHalfH0); break; // top edge fixed
+        case RESIZE_T: dragAnchor.set(dragC0).mulAdd(dragZw, -dragHalfH0); break; // bottom edge fixed
+        default: break;
+      }
     } else {
       dragMode = DragMode.NONE;
       draggingNode = null;
@@ -503,19 +635,37 @@ public final class MountainTool implements Tool {
       dragStartX = mouseW.x; dragStartZ = mouseW.z;
       rebuildNodeList();
     } else if (dragMode != DragMode.NONE) {
-      // Resize along the selected edge in local space
-      float s = MathUtils.sinDeg(draggingNode.rotationDeg), c = MathUtils.cosDeg(draggingNode.rotationDeg);
-      // transform delta to local axes
-      float lx =  c*dx + s*dz;
-      float lz = -s*dx + c*dz;
+      // Stable local deltas in the snapshot frame
+      float lx = dragXw.x * dx + dragXw.z * dz; // projection on Xw
+      float lz = dragZw.x * dx + dragZw.z * dz; // projection on Zw
       switch (dragMode) {
-        case RESIZE_L: draggingNode.halfW = Math.max(1f, draggingNode.halfW - lx); draggingNode.center.mulAdd(new Vector3(-c,0f,-s), lx*0.5f); break;
-        case RESIZE_R: draggingNode.halfW = Math.max(1f, draggingNode.halfW + lx); draggingNode.center.mulAdd(new Vector3( c,0f, s), lx*0.5f); break;
-        case RESIZE_B: draggingNode.halfH = Math.max(1f, draggingNode.halfH - lz); draggingNode.center.mulAdd(new Vector3( s,0f,-c), lz*0.5f); break;
-        case RESIZE_T: draggingNode.halfH = Math.max(1f, draggingNode.halfH + lz); draggingNode.center.mulAdd(new Vector3(-s,0f, c), lz*0.5f); break;
+        case RESIZE_L: {
+          float newHalf = Math.max(1f, dragHalfW0 - lx * 0.5f);
+          draggingNode.halfW = newHalf;
+          draggingNode.center.set(dragAnchor).mulAdd(dragXw, -newHalf);
+          break;
+        }
+        case RESIZE_R: {
+          float newHalf = Math.max(1f, dragHalfW0 + lx * 0.5f);
+          draggingNode.halfW = newHalf;
+          draggingNode.center.set(dragAnchor).mulAdd(dragXw, +newHalf);
+          break;
+        }
+        case RESIZE_B: {
+          float newHalf = Math.max(1f, dragHalfH0 - lz * 0.5f);
+          draggingNode.halfH = newHalf;
+          draggingNode.center.set(dragAnchor).mulAdd(dragZw, -newHalf);
+          break;
+        }
+        case RESIZE_T: {
+          float newHalf = Math.max(1f, dragHalfH0 + lz * 0.5f);
+          draggingNode.halfH = newHalf;
+          draggingNode.center.set(dragAnchor).mulAdd(dragZw, +newHalf);
+          break;
+        }
         default: break;
       }
-      dragStartX = mouseW.x; dragStartZ = mouseW.z;
+      // do not update dragStart here; we want deltas from the original pointer-down for stability
       // Sync sliders
       updatingUI = true;
       try {
@@ -620,40 +770,40 @@ public final class MountainTool implements Tool {
         mesh.dispose();
       }
 
-      float r = (n == selected ? 1.0f : 0.2f), g = (n == selected ? 0.9f : 0.8f), b = (n == selected ? 0.2f : 1.0f), a = (n == selected ? 1f : 0.2f);
-      Gdx.gl.glLineWidth(n == selected ? 3f : 2f);
-      imLines.begin(cam.combined, GL20.GL_LINES);
-      imLines.color(r,g,b,a); imLines.vertex(wx[0], 0f, wz[0]);
-      imLines.color(r,g,b,a); imLines.vertex(wx[1], 0f, wz[1]);
-      imLines.color(r,g,b,a); imLines.vertex(wx[1], 0f, wz[1]);
-      imLines.color(r,g,b,a); imLines.vertex(wx[2], 0f, wz[2]);
-      imLines.color(r,g,b,a); imLines.vertex(wx[2], 0f, wz[2]);
-      imLines.color(r,g,b,a); imLines.vertex(wx[3], 0f, wz[3]);
-      imLines.color(r,g,b,a); imLines.vertex(wx[3], 0f, wz[3]);
-      imLines.color(r,g,b,a); imLines.vertex(wx[0], 0f, wz[0]);
+      // Edge highlighting like other tools
       float base = Math.max(hw, hh);
       float marginMeters = Math.max(0.5f, handleMarginPct * base);
-      float iw = Math.max(0f, hw - marginMeters);
-      float ih = Math.max(0f, hh - marginMeters);
-      float[] ilx = new float[]{ -iw,  iw,  iw, -iw };
-      float[] ilz = new float[]{ -ih, -ih,  ih,  ih };
-      float[] ix = new float[4];
-      float[] iz = new float[4];
-      for (int i=0;i<4;i++){
-        float rx2 =  ilx[i]*c - ilz[i]*s;
-        float rz2 =  ilx[i]*s + ilz[i]*c;
-        ix[i] = cx + rx2;
-        iz[i] = cz + rz2;
+      DragMode hover = DragMode.NONE;
+      if (groundHit(cam, mouseW)) {
+        hover = detectHandle(n, mouseW.x, mouseW.z, marginMeters);
       }
-      float rr = 1.0f, gg = 1.0f, bb = 1.0f, aa = 0.25f;
-      imLines.color(rr,gg,bb,aa); imLines.vertex(ix[0], 0f, iz[0]);
-      imLines.color(rr,gg,bb,aa); imLines.vertex(ix[1], 0f, iz[1]);
-      imLines.color(rr,gg,bb,aa); imLines.vertex(ix[1], 0f, iz[1]);
-      imLines.color(rr,gg,bb,aa); imLines.vertex(ix[2], 0f, iz[2]);
-      imLines.color(rr,gg,bb,aa); imLines.vertex(ix[2], 0f, iz[2]);
-      imLines.color(rr,gg,bb,aa); imLines.vertex(ix[3], 0f, iz[3]);
-      imLines.color(rr,gg,bb,aa); imLines.vertex(ix[3], 0f, iz[3]);
-      imLines.color(rr,gg,bb,aa); imLines.vertex(ix[0], 0f, iz[0]);
+      float br = (n == selected ? 1.0f : 0.2f);
+      float bg = (n == selected ? 0.9f : 0.8f);
+      float bb = (n == selected ? 0.2f : 1.0f);
+      float ba = (n == selected ? 1f : 0.6f);
+      float hr = 0.2f, hg = 0.95f, hb = 1f, ha = 1f;
+      Gdx.gl.glLineWidth(n == selected ? 3f : 2f);
+      imLines.begin(cam.combined, GL20.GL_LINES);
+      // bottom (0-1)
+      if (hover == DragMode.RESIZE_B && n == selected) imLines.color(hr,hg,hb,ha); else imLines.color(br,bg,bb,ba);
+      imLines.vertex(wx[0], 0f, wz[0]);
+      if (hover == DragMode.RESIZE_B && n == selected) imLines.color(hr,hg,hb,ha); else imLines.color(br,bg,bb,ba);
+      imLines.vertex(wx[1], 0f, wz[1]);
+      // right (1-2)
+      if (hover == DragMode.RESIZE_R && n == selected) imLines.color(hr,hg,hb,ha); else imLines.color(br,bg,bb,ba);
+      imLines.vertex(wx[1], 0f, wz[1]);
+      if (hover == DragMode.RESIZE_R && n == selected) imLines.color(hr,hg,hb,ha); else imLines.color(br,bg,bb,ba);
+      imLines.vertex(wx[2], 0f, wz[2]);
+      // top (2-3)
+      if (hover == DragMode.RESIZE_T && n == selected) imLines.color(hr,hg,hb,ha); else imLines.color(br,bg,bb,ba);
+      imLines.vertex(wx[2], 0f, wz[2]);
+      if (hover == DragMode.RESIZE_T && n == selected) imLines.color(hr,hg,hb,ha); else imLines.color(br,bg,bb,ba);
+      imLines.vertex(wx[3], 0f, wz[3]);
+      // left (3-0)
+      if (hover == DragMode.RESIZE_L && n == selected) imLines.color(hr,hg,hb,ha); else imLines.color(br,bg,bb,ba);
+      imLines.vertex(wx[3], 0f, wz[3]);
+      if (hover == DragMode.RESIZE_L && n == selected) imLines.color(hr,hg,hb,ha); else imLines.color(br,bg,bb,ba);
+      imLines.vertex(wx[0], 0f, wz[0]);
       imLines.end();
     }
 

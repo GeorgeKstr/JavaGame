@@ -54,9 +54,9 @@ public final class RenderBootstrap {
     // Pipeline order: sky → terrain → rays → birds → marker (marker on top of everything)
     return new RenderPipeline()
         .add(sky)
+        .add(birds)
         .add(terrainPass)
         .add(rays)
-        .add(birds)
         .add(marker);
   }
 }

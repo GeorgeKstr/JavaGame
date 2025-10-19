@@ -18,6 +18,7 @@ import com.example.game.World.Editor.*;
 import com.example.game.World.Editor.Layers.TerrainLayer;
 import com.example.game.World.Editor.Layers.WalkLayer;
 import com.example.game.World.Editor.Layers.SplinesLayer;
+import com.example.game.World.Editor.Layers.HeightmapsLayer;
 import com.example.game.Render.Pipeline.RenderBootstrap;
 import com.example.game.Config.Settings;
 import com.example.game.Config.cvar.CVars;
@@ -47,6 +48,7 @@ public class EditorScreen implements Screen {
   private EditorHUD hud;
   private com.example.game.World.Editor.Layers.SplinesLayer splinesLayerRef;
   private com.example.game.World.Editor.Layers.TerrainLayer terrainLayerRef;
+  private com.example.game.World.Editor.Layers.HeightmapsLayer heightmapsLayerRef;
 
   // Loading overlay (non-blocking)
   private com.badlogic.gdx.scenes.scene2d.ui.Table loadingOverlay;
@@ -543,6 +545,9 @@ public class EditorScreen implements Screen {
     layers.add(new WalkLayer(terrain, hud.skin(), fpsCam));
     splinesLayerRef = new SplinesLayer(terrain, hud.skin());
     layers.add(splinesLayerRef);
+    // New: heightmaps layer hosting heightmap import and related tools
+    heightmapsLayerRef = new HeightmapsLayer(terrain, hud.skin());
+    layers.add(heightmapsLayerRef);
 
     // Build a simple loading overlay on the HUD stage
     // Centralized processor install: ensure deterministic order [rivers -> mountains]
@@ -552,13 +557,12 @@ public class EditorScreen implements Screen {
           new TerrainSystem.RiverBakePostProcessor(
               () -> splinesLayerRef.getCatalogSnapshot(), 12));
     }
-    if (terrainLayerRef != null) {
-      // Load mountains from map before installing processor so initial reload applies them
-      var mt = terrainLayerRef.getMountainTool();
+    if (heightmapsLayerRef != null) {
+      var mt = heightmapsLayerRef.getMountainTool();
       if (mt != null) mt.ensureLoadedFromMap();
       terrain.addChunkHeightPostProcessor(
           new TerrainSystem.MountainBakePostProcessor(
-              terrainLayerRef.getMountainTool().getStampsSupplier()));
+              heightmapsLayerRef.getMountainTool().getStampsSupplier()));
     }
     // Initial apply so current view reflects processors
     showLoading("Loading world...");
@@ -760,6 +764,13 @@ public class EditorScreen implements Screen {
       if (cur != null && "walk".equals(cur.id())) { this.fpsState = fpsCam.getState(); edCam.setState(rtsState); Gdx.input.setCursorCatched(false); }
       layers.setActive("splines"); hud.rebuildLeftPane(layers);
     }
+    if (Gdx.input.isKeyJustPressed(Input.Keys.F4)) {
+      // Switch to heightmaps layer
+      com.example.game.World.Editor.EditorLayer cur = layers.active();
+      if (cur != null && "walk".equals(cur.id())) { this.fpsState = fpsCam.getState(); edCam.setState(rtsState); Gdx.input.setCursorCatched(false); }
+      layers.setActive("heightmaps");
+      hud.rebuildLeftPane(layers);
+    }
 
     boolean ctrl = Gdx.input.isKeyPressed(Input.Keys.CONTROL_LEFT) || Gdx.input.isKeyPressed(Input.Keys.CONTROL_RIGHT);
     if (ctrl && Gdx.input.isKeyJustPressed(Input.Keys.S)) { saveMap(); performRefresh(); return;}
@@ -873,8 +884,8 @@ public class EditorScreen implements Screen {
             }
 
             // Apply mountain deltas (meters) to corners so outer preview reflects mountains
-            if (terrainLayerRef != null) {
-              var mt = terrainLayerRef.getMountainTool();
+            if (heightmapsLayerRef != null) {
+              var mt = heightmapsLayerRef.getMountainTool();
               if (mt != null) {
                 java.util.List<com.example.game.World.TerrainSystem.MountainStamp> stamps = mt.getStampsSupplier().get();
                 if (stamps != null && !stamps.isEmpty()) {
@@ -1021,8 +1032,8 @@ public class EditorScreen implements Screen {
     // Stage latest splines into the map before saving chunks/textures
     if (splinesLayerRef != null) splinesLayerRef.saveSplinesToMap();
     // Stage mountains (JSON + any images) so current properties are persisted
-    if (terrainLayerRef != null && terrainLayerRef.getMountainTool() != null) {
-      terrainLayerRef.getMountainTool().stageMountainsForSave();
+    if (heightmapsLayerRef != null && heightmapsLayerRef.getMountainTool() != null) {
+      heightmapsLayerRef.getMountainTool().stageMountainsForSave();
     }
     terrain.buildManifestMerged();
     terrain.encodeChunksToHmx();
