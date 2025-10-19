@@ -58,7 +58,7 @@ final class TerrainRenderer {
 
     float camX = cam.position.x, camZ = cam.position.z;
     // Cap expensive LOD mesh builds per frame to smooth spikes during streaming/refresh
-    final int MAX_BUILDS_PER_FRAME = 2;
+    final int MAX_BUILDS_PER_FRAME = 4;
     int builds = 0;
     for (IntMap.Entry<TerrainChunk> e : w.chunks) {
       TerrainChunk c = e.value;
@@ -95,6 +95,9 @@ final class TerrainRenderer {
 
     // Optional chunk grid overlay
     if (drawGrid) drawChunkGrid(cam);
+
+    // Drain GL disposals after draws to push delete cost out of main render path
+    TerrainChunk.processPendingDisposals(16);
   }
 
   void setWireframe(boolean on) { this.wireframe = on; }

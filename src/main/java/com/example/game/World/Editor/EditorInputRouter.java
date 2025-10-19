@@ -26,7 +26,6 @@ public final class EditorInputRouter extends InputAdapter {
     EditorLayer activeLayer();
 
     void cameraOrbit(float dx, float dy);
-    void cameraPan(float dx, float dy);
     void cameraZoom(float amount);
 
     /** WASD-style movement; dt provided by caller (update). */
@@ -72,11 +71,10 @@ public final class EditorInputRouter extends InputAdapter {
   public boolean touchDragged(int screenX, int screenY, int pointer) {
     //System.out.println("drag @ "+screenX+","+screenY+",  cursor at "+Gdx.input.getX()+","+Gdx.input.getY());
     if (mmbDown) {
-      // MMB drag: orbit; Shift+MMB: pan
-      boolean shift = Gdx.input.isKeyPressed(Input.Keys.SHIFT_LEFT) || Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT);
       float dx = Gdx.input.getDeltaX();
       float dy = -Gdx.input.getDeltaY();
-      if (!shift) access.cameraOrbit(dx, dy); else access.cameraPan(dx, dy);
+      access.cameraOrbit(dx, dy);
+    
       return true;
     }
 

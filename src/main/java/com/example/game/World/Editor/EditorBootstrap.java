@@ -24,15 +24,6 @@ public final class EditorBootstrap {
         // In FPS (Roam), invert Y so moving mouse up looks up; X preserved
         if (useFps) fpsCam.look(dx, -dy); else edCam.orbit(-dx, -dy);
       }
-      @Override public void cameraPan(float dx, float dy) {
-        EditorLayer l = layers.active();
-        boolean useFps = false;
-        if (l != null && "walk".equals(l.id()) && l instanceof BaseToolLayer) {
-          Tool t = ((BaseToolLayer) l).getActiveTool();
-          useFps = (t != null && "Roam".equals(t.name()));
-        }
-        if (!useFps) edCam.pan(cam, dx, dy);
-      }
       @Override public void cameraZoom(float amount) {
         EditorLayer l = layers.active();
         boolean useFps = false;

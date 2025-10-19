@@ -93,23 +93,17 @@ public final class EditorCamera {
 
   /** Pan the pivot in camera space (Shift+MMB by default). dx,dy in pixels. */
   public void pan(Camera cam, float dx, float dy) {
-    // Build a stable right/up basis from the current camera
+    System.out.println("pan: "+dx+", "+dy);
+    // Rebuild right/up from current camera
     right.set(cam.direction).crs(cam.up).nor();
     up.set(right).crs(cam.direction).nor();
 
-    // Map screen pixels to world units at current depth using FOV for more accurate dragging
-    if (cam instanceof PerspectiveCamera pc) {
-      float tanHalfY = MathUtils.tanDeg(pc.fieldOfView * 0.5f);
-      float aspect   = (float)Gdx.graphics.getWidth() / (float)Gdx.graphics.getHeight();
-      float tanHalfX = tanHalfY * aspect;
-      // World height of one screen at current depth ~ 2 * depth * tan(fov/2)
-      float worldPerPixelY = (2f * distance * tanHalfY) / Math.max(1, Gdx.graphics.getHeight());
-      float worldPerPixelX = (2f * distance * tanHalfX) / Math.max(1, Gdx.graphics.getWidth());
-      pivot.mulAdd(right, -dx * worldPerPixelX).mulAdd(up, dy * worldPerPixelY);
-    } else {
-      float s = Math.max(0.001f, distance) * panFactor;
-      pivot.mulAdd(right, -dx * s).mulAdd(up, dy * s);
-    }
+    // FPS-aware, FOV-independent: meters-per-pixel scaled by deltaTime (dt used exactly once)
+    float dt = Math.max(1e-6f, Gdx.graphics.getDeltaTime());
+    float metersPerPixel = Math.max(0.001f, distance / 3f) * panFactor * dt;
+
+    // Apply (no extra dt here)
+    pivot.mulAdd(right, -dx * metersPerPixel).mulAdd(up, dy * metersPerPixel);
   }
 
   /** Scroll (positive = zoom out by default). */
@@ -170,9 +164,9 @@ public final class EditorCamera {
 
     if (!delta.isZero()) {
       // Ensure reasonable speed at close range; behave a bit faster than walking when fully zoomed in
-      float minEffDist = 12f; // meters
+      float minEffDist = 10f; // meters
       float effDist = Math.max(distance, minEffDist);
-      float speed = dt * base * 1.25f * zoomFactor * effDist * 0.1f;
+      float speed = MathUtils.clamp(dt * zoomFactor * effDist * 0.10f * base, 0f, 15f);
       delta.nor().scl(-speed);
       pivot.add(delta);
     }

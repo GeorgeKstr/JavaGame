@@ -41,6 +41,18 @@ public class TerrainChunk {
   private int builtMaxLod = -1;
 
   private boolean dirty;          // CPU data changed → rebuild LODs
+  // Queue of meshes pending GL disposal to avoid spikes during camera movement/unloads
+  private static final java.util.concurrent.ConcurrentLinkedQueue<Mesh> PENDING_DISPOSE = new java.util.concurrent.ConcurrentLinkedQueue<>();
+  /** Dispose up to 'budget' meshes this frame (call on render thread). */
+  public static int processPendingDisposals(int budget) {
+    int n = 0; Mesh m;
+    while (n < budget && (m = PENDING_DISPOSE.poll()) != null) {
+      try { m.dispose(); } catch (Throwable ignored) {}
+      n++;
+    }
+    return n;
+  }
+  private static void enqueueDispose(Mesh m) { if (m != null) PENDING_DISPOSE.offer(m); }
 
   // Baseline copy of heights for baking reset (null until first bake uses it)
   private short[] baselineHeights;
@@ -444,13 +456,13 @@ public class TerrainChunk {
   }
 
   public void dispose() {
-    if (mesh != null) { mesh.dispose(); mesh = null; }
+    if (mesh != null) { enqueueDispose(mesh); mesh = null; }
     disposeLods();
   }
 
   private void disposeLods() {
-    if (lodMeshes != null)  for (Mesh m : lodMeshes) if (m != null) m.dispose();
-    if (lodSkirts != null)  for (Mesh m : lodSkirts) if (m != null) m.dispose();
+    if (lodMeshes != null)  for (Mesh m : lodMeshes) if (m != null) enqueueDispose(m);
+    if (lodSkirts != null)  for (Mesh m : lodSkirts) if (m != null) enqueueDispose(m);
     lodMeshes = null; lodSkirts = null; builtMaxLod = -1;
   }
 
