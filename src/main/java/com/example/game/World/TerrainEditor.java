@@ -519,11 +519,8 @@ public class TerrainEditor {
     float oldW = (slot==0? w0 : slot==1? w1 : w2);
     float target = Math.max(oldW, f);
     float delta  = target - oldW;
-    if (delta <= 1e-6f) {
-      // Nothing to raise; still allow bubble/sorting & gentle cut to keep arrays tidy, but skip trims.
-      // We'll just rewrite bytes (may early-return false to skip dirty if you prefer).
-      return false;
-    }
+    // Even if there's nothing to raise, continue to normalization and sorting below
+    // so that the target layer is promoted consistently and ordering is stable across cells.
 
     // Sum before the raise
     float sum = w0 + w1 + w2;
@@ -591,11 +588,6 @@ public class TerrainEditor {
       else { w0 = 0f; w1 = 0f; w2 = 1f; }
     }
 
-    // Bubble-up by weight so that layer 0 is the dominant/top layer
-    if (w1 > w0) { float tw=w0; w0=w1; w1=tw; int ti=id0; id0=id1; id1=ti; if (slot==0) slot=1; else if (slot==1) slot=0; }
-    if (w2 > w1) { float tw=w1; w1=w2; w2=tw; int ti=id1; id1=id2; id2=ti; if (slot==1) slot=2; else if (slot==2) slot=1; }
-    if (w1 > w0) { float tw=w0; w0=w1; w1=tw; int ti=id0; id0=id1; id1=ti; if (slot==0) slot=1; else if (slot==1) slot=0; }
-
     // Gentle dust cut for non-target layers; never let target fall below f
     float tWeight = (slot==0? w0 : slot==1? w1 : w2);
     if (slot != 0 && w0 < CUT) w0 = 0f;
@@ -629,22 +621,30 @@ public class TerrainEditor {
       }
     }
 
-    // write back (apply byte-level deadzone to non-targets; target is clamped normally)
-    id0Arr[idx] = (byte)id0; id1Arr[idx] = (byte)id1; id2Arr[idx] = (byte)id2;
+    // Convert to bytes first, apply byte-level deadzone to non-targets
     int cutByte = (int)Math.ceil(CUT * 255f);
-
     int b0 = Math.round(clamp01(w0) * 255f);
     int b1 = Math.round(clamp01(w1) * 255f);
     int b2 = Math.round(clamp01(w2) * 255f);
-
-    // Only zero-out non-targets with dust cut at byte level
     if (slot != 0 && b0 <= cutByte) b0 = 0;
     if (slot != 1 && b1 <= cutByte) b1 = 0;
     if (slot != 2 && b2 <= cutByte) b2 = 0;
 
-    w0Arr[idx] = (byte)b0;
-    w1Arr[idx] = (byte)b1;
-    w2Arr[idx] = (byte)b2;
+    // Deterministic ordering after quantization: sort by byte weight desc, then by id asc
+    // This avoids tiny float differences flipping layer order cell-to-cell
+    // We operate on triples (id, byteWeight)
+    int ida = id0, idb = id1, idc = id2;
+    int wa = b0, wb = b1, wc = b2;
+    // bubble pass 1 (b over a)
+    if (wb > wa || (wb == wa && idb < ida)) { int ti=ida; ida=idb; idb=ti; int tw=wa; wa=wb; wb=tw; }
+    // bubble pass 2 (c over b)
+    if (wc > wb || (wc == wb && idc < idb)) { int ti=idb; idb=idc; idc=ti; int tw=wb; wb=wc; wc=tw; }
+    // bubble pass 3 (b over a) again
+    if (wb > wa || (wb == wa && idb < ida)) { int ti=ida; ida=idb; idb=ti; int tw=wa; wa=wb; wb=tw; }
+
+    // write back in sorted order
+    id0Arr[idx] = (byte)ida; id1Arr[idx] = (byte)idb; id2Arr[idx] = (byte)idc;
+    w0Arr[idx] = (byte)wa;  w1Arr[idx] = (byte)wb;  w2Arr[idx] = (byte)wc;
 
     return true;
   }

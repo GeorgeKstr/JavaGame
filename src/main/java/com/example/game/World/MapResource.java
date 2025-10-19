@@ -67,6 +67,10 @@ public class MapResource {
   private final Map<String, byte[]> stagedTextures = new LinkedHashMap<>();
   // NEW: staged arbitrary extra entries (e.g., splines/splines.json)
   private final Map<String, byte[]> stagedExtras = new LinkedHashMap<>();
+  // NEW: small LRU cache for ZIP entries to avoid repeated full scans
+  private final Map<String, byte[]> entryCache = new LinkedHashMap<>(128, 0.75f, true) {
+    @Override protected boolean removeEldestEntry(Map.Entry<String, byte[]> eldest) { return size() > 256; }
+  };
 
   private MapResource(Manifest m, byte[] bytes) {
     this.manifest = m;
@@ -166,13 +170,19 @@ public class MapResource {
 
   /** Read an arbitrary entry from the .map zip; returns null if not found. */
   public byte[] readEntry(String pathInZip) {
+    // Check staged first via getTextureBytes() callers; here we also consult the entry cache
+    byte[] cached;
+    synchronized (entryCache) { cached = entryCache.get(pathInZip); }
+    if (cached != null) return cached;
     try (ZipInputStream zin = new ZipInputStream(new ByteArrayInputStream(bytes))) {
       ZipEntry e;
       while ((e = zin.getNextEntry()) != null) {
         if (e.getName().equals(pathInZip)) {
           ByteArrayOutputStream out = new ByteArrayOutputStream();
           zin.transferTo(out);
-          return out.toByteArray();
+          byte[] data = out.toByteArray();
+          synchronized (entryCache) { entryCache.put(pathInZip, data); }
+          return data;
         }
       }
       return null;

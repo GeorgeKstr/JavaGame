@@ -16,6 +16,7 @@ import com.example.game.World.MapResource;
 import com.example.game.World.TerrainSystem;
 
 import java.util.*;
+import java.util.concurrent.*;
 import java.util.function.Consumer;
 
 /**
@@ -41,9 +42,26 @@ public final class TextureBrowser extends Window {
   private final Label pathLabel;
   private final Array<Texture> tempThumbs = new Array<>(false, 32);
   private final ButtonGroup<Button> buttonGroup = new ButtonGroup<>();
+  private float lastStageW = -1f, lastStageH = -1f;
+  private com.badlogic.gdx.graphics.g2d.BitmapFont folderFont;
+  private float folderFontScaleX = 1f, folderFontScaleY = 1f;
 
   private String currentFolder = ""; // subpath under textures/ground ("" = root)
   private MapResource.TextureRef selected;
+
+  // Shared thumbnail cache across browser windows
+  private static final ConcurrentHashMap<String, Texture> THUMB_CACHE = new ConcurrentHashMap<>();
+  // Keep concurrency small and use daemon threads so they won't block JVM shutdown
+  private static final ExecutorService THUMB_EXEC = Executors.newFixedThreadPool(2, new ThreadFactory() {
+    private final java.util.concurrent.atomic.AtomicInteger n = new java.util.concurrent.atomic.AtomicInteger(1);
+    @Override public Thread newThread(Runnable r) {
+      Thread t = new Thread(r, "ThumbExec-" + n.getAndIncrement());
+      t.setDaemon(true);
+      return t;
+    }
+  });
+  private static Texture PLACEHOLDER;
+  private boolean visibleOnStage = false;
 
   public TextureBrowser(Skin skin, TerrainSystem terrain, Consumer<MapResource.TextureRef> onSelect) {
     this(skin, terrain, null, onSelect);
@@ -64,6 +82,13 @@ public final class TextureBrowser extends Window {
     // Left: folder list
     folderList = new com.badlogic.gdx.scenes.scene2d.ui.List<>(skin);
     refreshFolderList();
+    // Downscale folder list font (restored on close)
+    if (folderList.getStyle() != null && folderList.getStyle().font != null) {
+      folderFont = folderList.getStyle().font;
+      folderFontScaleX = folderFont.getData().scaleX;
+      folderFontScaleY = folderFont.getData().scaleY;
+      folderFont.getData().setScale(0.9f, 0.9f);
+    }
     ScrollPane treeScroll = new ScrollPane(folderList, skin);
     treeScroll.setFadeScrollBars(false);
     treeScroll.setScrollingDisabled(true, false);
@@ -74,6 +99,7 @@ public final class TextureBrowser extends Window {
 
     Table bar = new Table();
     pathLabel = new Label(pathString(), skin);
+    pathLabel.setFontScale(0.9f);
     TextButton importBtn = new TextButton("Import...", skin);
     TextButton newFolderBtn = new TextButton("New Folder", skin);
     TextButton deleteBtn = new TextButton("Delete", skin);
@@ -118,8 +144,8 @@ public final class TextureBrowser extends Window {
     importBtn.addListener(new ChangeListener() {
       @Override public void changed(ChangeEvent event, Actor actor) {
         new Thread(() -> {
-          int insertedId = terrain.importGroundTextureDesktopInto(currentFolder, 1.0f);
-          if (insertedId >= 0) {
+          int[] ids = terrain.importGroundTexturesDesktopInto(currentFolder, 1.0f);
+          if (ids != null && ids.length > 0) {
             Gdx.app.postRunnable(() -> {
               terrain.reloadGroundTextures();
               map.saveInPlaceDeltaIncludingStaged(java.util.Collections.emptyMap());
@@ -132,7 +158,7 @@ public final class TextureBrowser extends Window {
     });
     newFolderBtn.addListener(new ChangeListener() {
       @Override public void changed(ChangeEvent event, Actor actor) {
-        TextInputDialog.show(getStage(), skin, "Create Folder", "Subfolder under textures/ground:", currentFolder, input -> {
+        TextInputDialog.show(getStage(), skin, "Create Folder", "Subfolder under textures:", currentFolder, input -> {
           String nf = normalizeFolder(input);
           // No-op if exists; folders are implicit from texture paths
           currentFolder = nf;
@@ -166,8 +192,7 @@ public final class TextureBrowser extends Window {
     });
     close.addListener(new ChangeListener() { @Override public void changed(ChangeEvent event, Actor actor) { TextureBrowser.this.remove(); }});
 
-    // Initial content
-    rebuildGrid();
+    // Defer grid build until the window is actually shown to avoid startup stalls
   }
 
   private String pathString() { return "textures/" + (currentFolder.isEmpty() ? "" : currentFolder + "/"); }
@@ -195,10 +220,10 @@ public final class TextureBrowser extends Window {
 
     int col = 0; Table row = new Table();
     for (MapResource.TextureRef tr : list) {
-      Texture thumb = buildThumb(tr.file);
-      tempThumbs.add(thumb);
-      Image img = new Image(thumb); img.setScaling(Scaling.fit); img.setAlign(Align.center);
-      Label name = new Label(shortName(tr), skin); name.setAlignment(Align.center);
+      Image img = new Image(getPlaceholder()); img.setScaling(Scaling.fit); img.setAlign(Align.center);
+      // kick off async load (or set immediately from cache)
+      Label name = new Label("(loading...)", skin); name.setAlignment(Align.center); name.setFontScale(0.85f);
+      loadThumbAsync(tr, img, name);
 
       Table cell = new Table();
       cell.add(img).size(THUMB, THUMB).row();
@@ -224,28 +249,75 @@ public final class TextureBrowser extends Window {
     gridScroll.layout();
   }
 
+  private Texture getPlaceholder() {
+    if (PLACEHOLDER == null) {
+      Pixmap pm = new Pixmap(THUMB, THUMB, Pixmap.Format.RGBA8888);
+      pm.setColor(0.12f, 0.12f, 0.12f, 1f); pm.fill();
+      pm.setColor(0.25f, 0.25f, 0.25f, 1f);
+      for (int i = 0; i < THUMB; i += 6) { pm.drawLine(0, i, THUMB, i); }
+      PLACEHOLDER = new Texture(pm);
+      PLACEHOLDER.setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
+      pm.dispose();
+    }
+    return PLACEHOLDER;
+  }
+
+  private void loadThumbAsync(MapResource.TextureRef tr, Image targetImg, Label nameLabel) {
+    // If cached, set immediately on UI thread
+    Texture cached = THUMB_CACHE.get(tr.file);
+    if (cached != null) {
+      targetImg.setDrawable(new Image(cached).getDrawable());
+      nameLabel.setText(shortName(tr));
+      return;
+    }
+
+    // Show placeholder now; schedule background work (no GL calls in worker)
+    THUMB_EXEC.submit(() -> {
+      Pixmap scaled = null;
+      try {
+        // Skip work if dialog is no longer visible
+        if (!visibleOnStage) return;
+        byte[] bytes = map.getTextureBytes(tr.file);
+        if (bytes != null && bytes.length > 0) {
+          Pixmap src = new Pixmap(bytes, 0, bytes.length);
+          Pixmap tmp = new Pixmap(THUMB, THUMB, Pixmap.Format.RGBA8888);
+          tmp.drawPixmap(src, 0, 0, src.getWidth(), src.getHeight(), 0, 0, THUMB, THUMB);
+          src.dispose();
+          scaled = tmp; // pass to GL thread
+        }
+      } catch (Throwable ignored) {}
+
+      final Pixmap finalScaled = scaled; // may be null -> use placeholder
+      Gdx.app.postRunnable(() -> {
+        if (!visibleOnStage) { if (finalScaled != null) finalScaled.dispose(); return; }
+        try {
+          Texture tex;
+          if (finalScaled == null) {
+            tex = getPlaceholder();
+          } else {
+            tex = new Texture(finalScaled);
+            tex.setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
+            finalScaled.dispose();
+          }
+          THUMB_CACHE.putIfAbsent(tr.file, tex);
+          Texture use = THUMB_CACHE.get(tr.file);
+          if (use == null) use = tex;
+          targetImg.setDrawable(new Image(use).getDrawable());
+          nameLabel.setText(shortName(tr));
+        } catch (Throwable ignored) {
+          // Leave placeholder on error
+        }
+      });
+    });
+  }
+
   private String shortName(MapResource.TextureRef tr) {
     String label = (tr.name != null && !tr.name.isEmpty()) ? tr.name : tr.file;
     int slash = Math.max(label.lastIndexOf('/'), label.lastIndexOf('\\'));
     return (slash >= 0 ? label.substring(slash + 1) : label);
   }
 
-  private Texture buildThumb(String pathInZip) {
-    byte[] bytes = map.getTextureBytes(pathInZip);
-    if (bytes == null || bytes.length == 0) {
-      Pixmap pm = new Pixmap(THUMB, THUMB, Pixmap.Format.RGBA8888);
-      pm.setColor(0.15f,0.15f,0.15f,1f); pm.fill();
-      Texture t = new Texture(pm); pm.dispose(); return t;
-    }
-    Pixmap src = new Pixmap(bytes, 0, bytes.length);
-    Pixmap scaled = new Pixmap(THUMB, THUMB, Pixmap.Format.RGBA8888);
-    scaled.drawPixmap(src, 0, 0, src.getWidth(), src.getHeight(), 0, 0, THUMB, THUMB);
-    src.dispose();
-    Texture t = new Texture(scaled);
-    t.setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear);
-    scaled.dispose();
-    return t;
-  }
+  // buildThumb() removed; thumbnails are generated asynchronously via loadThumbAsync
 
   private static String normalizeFolder(String input) {
     if (input == null) return "";
@@ -258,14 +330,36 @@ public final class TextureBrowser extends Window {
   public void show(Stage stage) {
     pack();
     setPosition(Math.round((stage.getWidth()-getWidth())*0.5f), Math.round((stage.getHeight()-getHeight())*0.5f));
+    lastStageW = stage.getWidth(); lastStageH = stage.getHeight();
     stage.addActor(this);
+    visibleOnStage = true;
+    // Build folder list and grid only when visible
+    refreshFolderList();
+    rebuildGrid();
   }
 
   @Override public boolean remove() {
     boolean r = super.remove();
     for (Texture t : tempThumbs) t.dispose();
     tempThumbs.clear();
+    // Restore folder list font scale
+    if (folderFont != null) {
+      folderFont.getData().setScale(folderFontScaleX, folderFontScaleY);
+    }
+    visibleOnStage = false;
     return r;
+  }
+
+  @Override public void act(float delta) {
+    super.act(delta);
+    Stage st = getStage();
+    if (st != null) {
+      float w = st.getWidth(), h = st.getHeight();
+      if (w != lastStageW || h != lastStageH) {
+        lastStageW = w; lastStageH = h;
+        setPosition(Math.round((w - getWidth()) * 0.5f), Math.round((h - getHeight()) * 0.5f));
+      }
+    }
   }
 
   // Simple text input popup

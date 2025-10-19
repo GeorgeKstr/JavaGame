@@ -45,7 +45,6 @@ final class TerrainWorld {
 
   // LOD
   int MAX_LOD = 0;
-  float[] lodDistances = new float[]{ 50f, 130f, 260f, 520f };
   float hysteresis = 12f;
   final IntMap<Integer> lastLod = new IntMap<>();
 

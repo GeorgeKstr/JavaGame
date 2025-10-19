@@ -9,13 +9,12 @@ import com.example.game.Render.SimpleShader;
 
 final class TerrainRenderer {
   private final TerrainWorld w;
-  private final LodController lod;
   private boolean wireframe = false;
   private boolean drawGrid = false;
   private final ImmediateModeRenderer20 im = new ImmediateModeRenderer20(false, true, 0);
 
-  TerrainRenderer(TerrainWorld w, LodController lod){
-    this.w = w; this.lod = lod;
+  TerrainRenderer(TerrainWorld w){
+    this.w = w;
   }
 
   void render(SimpleShader shader, Camera cam) {
@@ -58,16 +57,31 @@ final class TerrainRenderer {
     }
 
     float camX = cam.position.x, camZ = cam.position.z;
+    // Cap expensive LOD mesh builds per frame to smooth spikes during streaming/refresh
+    final int MAX_BUILDS_PER_FRAME = 2;
+    int builds = 0;
     for (IntMap.Entry<TerrainChunk> e : w.chunks) {
       TerrainChunk c = e.value;
-      // If painting changed CPU arrays, ensure LOD meshes are rebuilt before rendering
+      // If painting changed CPU arrays, ensure LOD meshes are rebuilt; throttle to avoid hitches
       if (c.isDirty()) {
-        c.buildLods(w.MAX_LOD);
-        c.setDirty(false);
-        w.defaultFlatChunks.remove(e.key);
+        if (builds < MAX_BUILDS_PER_FRAME) {
+          c.buildLods(w.MAX_LOD);
+          c.setDirty(false);
+          w.defaultFlatChunks.remove(e.key);
+          builds++;
+        }
+        // else: render with existing meshes this frame; will rebuild next frames
       }
-      if (!c.hasLods(w.MAX_LOD)) c.buildLods(w.MAX_LOD);
-      int sel = lod.selectLod(camX, camZ, c);
+      if (!c.hasLods(w.MAX_LOD)) {
+        if (builds < MAX_BUILDS_PER_FRAME) {
+          c.buildLods(w.MAX_LOD);
+          builds++;
+        } else {
+          // No meshes yet and build budget spent: skip this chunk this frame to keep FPS stable
+          continue;
+        }
+      }
+      int sel = 0;
       c.renderLod(shader, sel);
       c.renderLodSkirt(shader, sel);
     }

@@ -28,17 +28,15 @@ public class TerrainSystem implements HeightSampler {
   final TerrainWorld world;
   private final TerrainStreamer streamer;
   private final TerrainEditor editor;
-  private final LodController lod;
   private final TerrainRenderer renderer;
   private final TerrainIO io;
   private final TerrainPicking picking;
 
   public TerrainSystem(MapResource map) {
     this.world    = new TerrainWorld(map);
-    this.lod      = new LodController(world);
     this.streamer = new TerrainStreamer(world);
     this.editor   = new TerrainEditor(world);
-    this.renderer = new TerrainRenderer(world, lod);
+    this.renderer = new TerrainRenderer(world);
     this.io       = new TerrainIO(world);
     this.picking  = new TerrainPicking(world);
   }
@@ -603,33 +601,63 @@ public class TerrainSystem implements HeightSampler {
     }
   }
 
-  /** Desktop file chooser that imports a texture into a specific subfolder under textures/ground/. */
-  public int importGroundTextureDesktopInto(String subfolder, float uvScale) {
-    if (Gdx.app.getType() != com.badlogic.gdx.Application.ApplicationType.Desktop) return -1;
+  /** Desktop file chooser that imports one or more textures into a specific subfolder under textures/ground/. */
+  public int[] importGroundTexturesDesktopInto(String subfolder, float uvScale) {
+    if (Gdx.app.getType() != com.badlogic.gdx.Application.ApplicationType.Desktop) return new int[0];
 
-    final String[] abs = { null };
+    final java.util.List<String> paths = new java.util.ArrayList<>();
     try {
       javax.swing.SwingUtilities.invokeAndWait(() -> {
         javax.swing.JFileChooser fc = new javax.swing.JFileChooser();
-        fc.setDialogTitle("Import Texture");
+        fc.setDialogTitle("Import Textures");
         fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Images", "png", "jpg", "jpeg", "bmp"));
-        if (fc.showOpenDialog(null) == javax.swing.JFileChooser.APPROVE_OPTION) {
-          abs[0] = fc.getSelectedFile().getAbsolutePath();
+        fc.setMultiSelectionEnabled(true);
+        try {
+          com.badlogic.gdx.Preferences prefs = (Gdx.app != null ? Gdx.app.getPreferences("editor_prefs") : null);
+          String lastDir = (prefs != null ? prefs.getString("lastTextureDir", null) : null);
+          if (lastDir != null) fc.setCurrentDirectory(new java.io.File(lastDir));
+        } catch (Throwable ignored) {}
+        int res = fc.showOpenDialog(null);
+        if (res == javax.swing.JFileChooser.APPROVE_OPTION) {
+          java.io.File[] sel = fc.getSelectedFiles();
+          if (sel != null && sel.length > 0) {
+            for (java.io.File f : sel) if (f != null) paths.add(f.getAbsolutePath());
+            try {
+              com.badlogic.gdx.Preferences prefs = (Gdx.app != null ? Gdx.app.getPreferences("editor_prefs") : null);
+              if (prefs != null && sel[0] != null && sel[0].getParent() != null) { prefs.putString("lastTextureDir", sel[0].getParent()); prefs.flush(); }
+            } catch (Throwable ignored) {}
+          } else if (fc.getSelectedFile() != null) {
+            java.io.File f = fc.getSelectedFile();
+            paths.add(f.getAbsolutePath());
+            try {
+              com.badlogic.gdx.Preferences prefs = (Gdx.app != null ? Gdx.app.getPreferences("editor_prefs") : null);
+              if (prefs != null && f.getParent() != null) { prefs.putString("lastTextureDir", f.getParent()); prefs.flush(); }
+            } catch (Throwable ignored) {}
+          }
         }
       });
     } catch (Exception ignored) {}
 
-    if (abs[0] == null) return -1;
+    if (paths.isEmpty()) return new int[0];
 
-    var fh = Gdx.files.absolute(abs[0]);
-    if (!fh.exists()) return -1;
+    java.util.ArrayList<Integer> ids = new java.util.ArrayList<>();
+    for (String p : paths) {
+      var fh = Gdx.files.absolute(p);
+      if (fh == null || !fh.exists()) continue;
+      byte[] data = fh.readBytes();
+      MapResource.TextureRef tr = world.map.importGroundTextureIntoFolder(fh.name(), data, subfolder);
+      tr.uvScale = uvScale;
+      ids.add(tr.id);
+    }
+    // Caller (e.g., TextureBrowser) must reload GL resources on the render thread after import.
+    int[] arr = new int[ids.size()]; for (int i=0;i<ids.size();i++) arr[i]=ids.get(i);
+    return arr;
+  }
 
-    byte[] data = fh.readBytes();
-    MapResource.TextureRef tr = world.map.importGroundTextureIntoFolder(fh.name(), data, subfolder);
-    tr.uvScale = uvScale;
-    // Do NOT reload here (GL calls must happen on the render thread).
-    // Caller (e.g., TextureBrowser) will post a reload to the GL thread.
-    return tr.id;
+  /** Back-compat single import that uses the multi importer and returns the first id, or -1 if none. */
+  public int importGroundTextureDesktopInto(String subfolder, float uvScale) {
+    int[] ids = importGroundTexturesDesktopInto(subfolder, uvScale);
+    return (ids.length > 0 ? ids[0] : -1);
   }
 
   // ----------------------------------------------------------------------------
