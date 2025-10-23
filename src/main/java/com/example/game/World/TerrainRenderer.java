@@ -57,29 +57,22 @@ final class TerrainRenderer {
     }
 
     float camX = cam.position.x, camZ = cam.position.z;
-    // Cap expensive LOD mesh builds per frame to smooth spikes during streaming/refresh
-    final int MAX_BUILDS_PER_FRAME = 4;
+    // Cap expensive first-time LOD mesh builds per frame to smooth spikes during streaming/refresh
+    final int MAX_BUILDS_PER_FRAME = 2;
     int builds = 0;
     for (IntMap.Entry<TerrainChunk> e : w.chunks) {
       TerrainChunk c = e.value;
-      // If painting changed CPU arrays, ensure LOD meshes are rebuilt; throttle to avoid hitches
+      // If painting changed CPU arrays, rebuild immediately so editor feedback is instant
       if (c.isDirty()) {
-        if (builds < MAX_BUILDS_PER_FRAME) {
-          c.buildLods(w.MAX_LOD);
-          c.setDirty(false);
-          w.defaultFlatChunks.remove(e.key);
-          builds++;
-        }
-        // else: render with existing meshes this frame; will rebuild next frames
+        c.buildLods(w.MAX_LOD);
+        c.setDirty(false);
+        w.defaultFlatChunks.remove(e.key);
       }
+      // If a chunk has NO meshes yet (newly loaded or first edit), build immediately to show results
       if (!c.hasLods(w.MAX_LOD)) {
-        if (builds < MAX_BUILDS_PER_FRAME) {
-          c.buildLods(w.MAX_LOD);
-          builds++;
-        } else {
-          // No meshes yet and build budget spent: skip this chunk this frame to keep FPS stable
-          continue;
-        }
+        c.buildLods(w.MAX_LOD);
+        c.setDirty(false);
+        w.defaultFlatChunks.remove(e.key);
       }
       int sel = 0;
       c.renderLod(shader, sel);

@@ -93,17 +93,29 @@ public final class EditorCamera {
 
   /** Pan the pivot in camera space (Shift+MMB by default). dx,dy in pixels. */
   public void pan(Camera cam, float dx, float dy) {
-    System.out.println("pan: "+dx+", "+dy);
     // Rebuild right/up from current camera
     right.set(cam.direction).crs(cam.up).nor();
     up.set(right).crs(cam.direction).nor();
 
-    // FPS-aware, FOV-independent: meters-per-pixel scaled by deltaTime (dt used exactly once)
+    // FPS-aware mapping: use FOV if perspective, else fallback. Apply dt exactly once.
     float dt = Math.max(1e-6f, Gdx.graphics.getDeltaTime());
-    float metersPerPixel = Math.max(0.001f, distance / 3f) * panFactor * dt;
+    float mppX, mppY; // meters per pixel along X/Y
+    if (cam instanceof com.badlogic.gdx.graphics.PerspectiveCamera pc) {
+      float tanHalfY = MathUtils.tanDeg(pc.fieldOfView * 0.5f);
+      float aspect = (float)Gdx.graphics.getWidth() / Math.max(1, Gdx.graphics.getHeight());
+      float tanHalfX = tanHalfY * aspect;
+      // World size of one screen at current depth
+      float worldPerPixelY = (2f * Math.max(0.001f, distance) * tanHalfY) / Math.max(1, Gdx.graphics.getHeight());
+      float worldPerPixelX = (2f * Math.max(0.001f, distance) * tanHalfX) / Math.max(1, Gdx.graphics.getWidth());
+      mppX = worldPerPixelX * panFactor * dt;
+      mppY = worldPerPixelY * panFactor * dt;
+    } else {
+      float base = Math.max(0.001f, distance / 3f) * panFactor * dt;
+      mppX = base; mppY = base;
+    }
 
-    // Apply (no extra dt here)
-    pivot.mulAdd(right, -dx * metersPerPixel).mulAdd(up, dy * metersPerPixel);
+    // Apply
+    pivot.mulAdd(right, -dx * mppX).mulAdd(up, dy * mppY);
   }
 
   /** Scroll (positive = zoom out by default). */

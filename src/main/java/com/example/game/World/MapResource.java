@@ -71,6 +71,7 @@ public class MapResource {
   private final Map<String, byte[]> entryCache = new LinkedHashMap<>(128, 0.75f, true) {
     @Override protected boolean removeEldestEntry(Map.Entry<String, byte[]> eldest) { return size() > 256; }
   };
+  private void clearEntryCache() { synchronized (entryCache) { entryCache.clear(); } }
 
   private MapResource(Manifest m, byte[] bytes) {
     this.manifest = m;
@@ -99,6 +100,7 @@ public class MapResource {
     try {
       bytes = Files.readAllBytes(Paths.get(path));
       this.sourcePath = path;
+      clearEntryCache();
     } catch (IOException e) {
       e.printStackTrace();
     }
@@ -684,6 +686,7 @@ public class MapResource {
     // Refresh in-memory bytes from disk so subsequent operations see the latest file
     try {
       this.bytes = Files.readAllBytes(Paths.get(path));
+      clearEntryCache();
     } catch (IOException e) {
       // not fatal for runtime, but helpful for hot-edit flows
       e.printStackTrace();

@@ -2,7 +2,13 @@ package com.example.game.Screens;
 
 import com.badlogic.gdx.*;
 import com.badlogic.gdx.graphics.*;
+import com.badlogic.gdx.graphics.glutils.FrameBuffer;
+import com.badlogic.gdx.graphics.glutils.GLFrameBuffer;
+import com.badlogic.gdx.graphics.glutils.GLFrameBuffer.FrameBufferBuilder;
+import com.badlogic.gdx.graphics.g2d.SpriteBatch;
+import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.math.MathUtils;
+import com.badlogic.gdx.math.Matrix4;
 import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.scenes.scene2d.ui.Dialog;
 import com.example.game.Config.SettingsStore;
@@ -61,6 +67,73 @@ public class EditorScreen implements Screen {
   // rendering
   private RenderContext ctx;
   private RenderPipeline pipeline;
+  private com.example.game.Render.SimpleSolidShader lodSolidOcc; // solid black for occlusion
+
+  // Blit resources (present FBO with gamma correction)
+  private com.badlogic.gdx.graphics.Mesh blitQuad;
+  private com.badlogic.gdx.graphics.glutils.ShaderProgram blitProg;
+  private void ensureBlitResources() {
+    if (blitQuad == null) {
+      float[] v = {
+        // x,y,  u,v  (flip V to correct FBO texture inversion)
+        -1,-1,  0,0,
+         1,-1,  1,0,
+         1, 1,  1,1,
+        -1, 1,  0,1
+      };
+      short[] i = {0,1,2, 0,2,3};
+      blitQuad = new com.badlogic.gdx.graphics.Mesh(true, 4, 6,
+        new com.badlogic.gdx.graphics.VertexAttribute(com.badlogic.gdx.graphics.VertexAttributes.Usage.Position, 2, "a_position"),
+        new com.badlogic.gdx.graphics.VertexAttribute(com.badlogic.gdx.graphics.VertexAttributes.Usage.TextureCoordinates, 2, "a_texCoord0")
+      );
+      blitQuad.setVertices(v);
+      blitQuad.setIndices(i);
+    }
+
+    if (blitProg == null) {
+      com.badlogic.gdx.graphics.glutils.ShaderProgram.pedantic = false;
+      String vsrc = "attribute vec2 a_position;\n"+
+                    "attribute vec2 a_texCoord0;\n"+
+                    "varying vec2 v_uv;\n"+
+                    "void main(){ v_uv=a_texCoord0; gl_Position=vec4(a_position,0.0,1.0); }";
+      String fsrc = "#ifdef GL_ES\nprecision mediump float;\n#endif\n"+
+                    "varying vec2 v_uv;\n"+
+                    "uniform sampler2D u_tex;\n"+
+                    "uniform float u_gamma;\n"+
+                    "void main(){ vec3 c = texture2D(u_tex, v_uv).rgb; c = pow(c, vec3(u_gamma)); gl_FragColor = vec4(c, 1.0); }";
+      blitProg = new com.badlogic.gdx.graphics.glutils.ShaderProgram(vsrc, fsrc);
+      if (!blitProg.isCompiled()) throw new IllegalStateException(blitProg.getLog());
+    }
+  }
+
+  // Draw outer LOD as solid black occluders into the currently bound framebuffer (for god rays occlusion)
+  private void drawNonLoadedChunkPreviewsOcclusion() {
+    if (map == null || terrain == null) return;
+    var mf = map.getManifest();
+    int S = mf.samplesPerSide; float tile = mf.tile; int cpc = S - 1; float chunkSize = cpc * tile;
+    int viewR = CVars.VIEW_RADIUS_CHUNKS.get();
+    int drawR = Math.max(viewR + 4, viewR * 2);
+    Vector3 f = edCam.focus();
+    int camCx = (int)Math.floor(f.x / chunkSize);
+    int camCz = (int)Math.floor(f.z / chunkSize);
+
+    if (!ensureLodShader()) return; // reuse mesh generation
+    rebuildLodMesh(camCx, camCz, drawR, chunkSize);
+    if (lodMesh == null) return;
+
+    // Build a simple solid shader lazily
+    if (lodSolidOcc == null) {
+      lodSolidOcc = new com.example.game.Render.SimpleSolidShader();
+      lodSolidOcc.init();
+      lodSolidOcc.setColor(new com.badlogic.gdx.graphics.Color(com.badlogic.gdx.graphics.Color.BLACK));
+    }
+
+    // State: occlusion FBO expects black shapes; depth is already disabled by caller
+    Gdx.gl.glDisable(GL20.GL_CULL_FACE);
+    Gdx.gl.glDisable(GL20.GL_BLEND);
+    lodSolidOcc.bind(cam.combined);
+    lodMesh.render(lodSolidOcc.getProgram(), GL20.GL_TRIANGLES);
+  }
 
   // --- Height minimap / non-loaded chunk preview ---
   // For low-LOD terrain preview: per-chunk corner heights (meters): [y00(x0,z0), y10(x1,z0), y01(x0,z1), y11(x1,z1)]
@@ -76,6 +149,10 @@ public class EditorScreen implements Screen {
   private boolean showOuterLod = true;
   private boolean showMinimap = false; // keep functionality, but do not use by default
 
+  private FrameBuffer fbo;
+  private SpriteBatch spriteBatch;
+  private TextureRegion fboRegion;
+
   // Shader-based LOD preview
   private com.badlogic.gdx.graphics.Mesh lodMesh;
   private com.badlogic.gdx.graphics.glutils.ShaderProgram lodShader;
@@ -84,6 +161,23 @@ public class EditorScreen implements Screen {
   public EditorScreen(GameApp app, String mapPath, Settings settings) {
     this.app = app; this.mapPath = mapPath; this.settings = settings;
     this.edCam = new EditorCamera(settings);
+    buildFbo(Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
+  }
+
+  private void buildFbo(int width, int height) {
+    if(fbo != null) {
+      fbo.dispose();
+    }
+    FrameBufferBuilder builder = new GLFrameBuffer.FrameBufferBuilder(width, height);
+    builder.addBasicColorTextureAttachment(Pixmap.Format.RGBA8888);
+    builder.addDepthRenderBuffer(GL30.GL_DEPTH_COMPONENT24);
+    fbo = builder.build();
+    // Build/update a flipped region of the FBO color buffer for screen drawing
+    Texture tex = fbo.getColorBufferTexture();
+    try { tex.setFilter(Texture.TextureFilter.Linear, Texture.TextureFilter.Linear); } catch (Throwable ignored) {}
+    try { tex.setWrap(Texture.TextureWrap.ClampToEdge, Texture.TextureWrap.ClampToEdge); } catch (Throwable ignored) {}
+    fboRegion = new TextureRegion(tex);
+    fboRegion.flip(false, true);
   }
 
   // ------------------------------------------------------------
@@ -474,6 +568,9 @@ public class EditorScreen implements Screen {
   @Override public void show() {
     hud = new EditorHUD();
     initLoadingOverlay();
+    // 2D batch for blitting FBO to backbuffer
+    spriteBatch = new SpriteBatch();
+    spriteBatch.setProjectionMatrix(new Matrix4().setToOrtho2D(0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight()));
     // Camera
     cam = new PerspectiveCamera(70f, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
     cam.near = 0.05f; cam.far = 8000f; cam.update();
@@ -510,7 +607,11 @@ public class EditorScreen implements Screen {
     // Apply persisted visual params before UI builds (from CVars)
     pipeline.get(SkyPass.class).setSunSizeDeg(CVars.RENDER_SUN_SIZE_DEG.get());
     pipeline.get(SkyPass.class).setWarmth(CVars.RENDER_SKY_WARMTH.get());
-    pipeline.get(GodRaysPass.class).setExposure(CVars.RENDER_GODRAYS_EXP.get());
+    {
+      float expVal = CVars.RENDER_GODRAYS_EXP.get();
+      float mapped = MathUtils.clamp(expVal, 0f, 5f) * 0.1f; // 0..5 slider -> 0..1.25 internal
+      pipeline.get(GodRaysPass.class).setExposure(mapped);
+    }
     pipeline.get(TerrainPass.class).setViewRadius(CVars.VIEW_RADIUS_CHUNKS.get());
 
     // Follow CVars automatically (cross-screen sync)
@@ -524,7 +625,8 @@ public class EditorScreen implements Screen {
     });
     CVars.RENDER_GODRAYS_EXP.onChanged(v -> {
       float val = v == null ? 3f : v;
-      pipeline.get(GodRaysPass.class).setExposure(val);
+      float mapped = MathUtils.clamp(val, 0f, 5f) * 0.1f; // tame response
+      pipeline.get(GodRaysPass.class).setExposure(mapped);
     });
     CVars.VIEW_RADIUS_CHUNKS.onChanged(v -> {
       int val = v == null ? 3 : v;
@@ -697,12 +799,47 @@ public class EditorScreen implements Screen {
     Gdx.gl.glEnable(GL20.GL_CULL_FACE);
     Gdx.gl.glCullFace(GL20.GL_BACK);
 
-    // Render
+    // Render: scene into offscreen FBO, then blit
+    // Allow passes to render extra occluders (outer LOD) and insert LOD between Sky and Terrain
+    ctx.occlusionExtra = showOuterLod ? this::drawNonLoadedChunkPreviewsOcclusion : null;
+    ctx.sceneExtraBeforeTerrain = showOuterLod ? this::drawNonLoadedChunkPreviews : null;
+    // Provide scene FBO handle so passes (e.g., GodRays) can restore it after their own FBOs
+    try { ctx.sceneFboHandle = fbo.getFramebufferHandle(); } catch (Throwable ignored) {}
     pipeline.update(dt, ctx);
+    fbo.begin();
+    // viewport matches FBO size (same as window in our buildFbo)
+    Gdx.gl.glViewport(0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
+    // clear color + depth for a known state
+    Gdx.gl.glClearColor(0f, 0f, 0f, 1f);
+    Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT | GL20.GL_DEPTH_BUFFER_BIT);
+    // conservative state
+    try { Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST); } catch (Throwable ignored) {}
+    Gdx.gl.glEnable(GL20.GL_DEPTH_TEST);
+    try { Gdx.gl.glDepthMask(true); } catch (Throwable ignored) {}
+    try { Gdx.gl.glDepthFunc(GL20.GL_LESS); } catch (Throwable ignored) {}
+    Gdx.gl.glEnable(GL20.GL_CULL_FACE);
+    Gdx.gl.glCullFace(GL20.GL_BACK);
+    Gdx.gl.glDisable(GL20.GL_BLEND);
+    try { Gdx.gl.glColorMask(true, true, true, true); } catch (Throwable ignored) {}
+    // The pipeline now invokes LOD via SceneExtraPass between Sky and Terrain
     pipeline.render(ctx);
+    fbo.end();
 
-    // Draw low-LOD terrain for non-loaded chunks using per-corner heights
-    if (showOuterLod) drawNonLoadedChunkPreviews();
+    // Blit FBO color to backbuffer with gamma correction
+    Gdx.gl.glDisable(GL20.GL_DEPTH_TEST);
+    try { Gdx.gl.glDisable(GL20.GL_BLEND); } catch (Throwable ignored) {}
+    try { Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST); } catch (Throwable ignored) {}
+    try { Gdx.gl.glDisable(GL20.GL_CULL_FACE); } catch (Throwable ignored) {}
+    Gdx.gl.glViewport(0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
+    ensureBlitResources();
+    blitProg.bind();
+    blitProg.setUniformi("u_tex", 0);
+    blitProg.setUniformf("u_gamma", 1.0f);
+    Gdx.gl.glActiveTexture(GL20.GL_TEXTURE0);
+    fbo.getColorBufferTexture().bind();
+    blitQuad.render(blitProg, GL20.GL_TRIANGLES);
+    // No backbuffer overlay for LOD when integrated into FBO
+    Gdx.gl.glEnable(GL20.GL_DEPTH_TEST);
 
     // Gizmos/overlays
     layers.render3D(cam);
@@ -980,9 +1117,13 @@ public class EditorScreen implements Screen {
   }
 
   @Override public void resize(int w, int h) {
+    buildFbo(w, h);
     cam.viewportWidth = w; cam.viewportHeight = h; cam.update();
     hud.stage().getViewport().update(w, h, true);
     if (pipeline != null) pipeline.resize(w, h);
+    if (spriteBatch != null) {
+      spriteBatch.setProjectionMatrix(new Matrix4().setToOrtho2D(0, 0, w, h));
+    }
   }
 
   @Override public void pause() {}
@@ -997,6 +1138,8 @@ public class EditorScreen implements Screen {
     if (terrain != null) terrain.dispose();
     if (lodMesh != null) { lodMesh.dispose(); lodMesh = null; }
     if (lodShader != null) { lodShader.dispose(); lodShader = null; }
+    if (fbo != null) { fbo.dispose(); fbo = null; }
+    if (spriteBatch != null) { spriteBatch.dispose(); spriteBatch = null; }
   }
 
   private void updateSunFromHour() {

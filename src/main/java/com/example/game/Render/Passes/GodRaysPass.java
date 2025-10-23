@@ -12,7 +12,7 @@ public final class GodRaysPass implements RenderPass {
   private final TerrainPass terrainPass;
   private final BirdsPass birdsPass;
 
-  public float exposure = 0.8f; // default; HUD will change this
+  public float exposure = 0.5f; // default; HUD will change this
 
   public GodRaysPass(SkyPass skyPass, TerrainPass terrainPass, BirdsPass birdsPass) {
     this.skyPass = skyPass;
@@ -24,28 +24,44 @@ public final class GodRaysPass implements RenderPass {
   public void setExposure(float e) { exposure = e; }
 
   @Override public void render(RenderContext ctx) {
-    // fade with camera facing the sun
+    // Fade strictly by camera facing the sun: zero when looking away
     float facing = ctx.cam.direction.dot(ctx.sunDir);
-    float fade = smoothstep(0.0f, 0.18f, Math.max(0f, facing));
-    if (fade <= 0.001f) return;
+    float fade = smoothstep(0.10f, 0.45f, facing); // 0 below ~0.1, 1 above ~0.45
+    // optional sharpening
+    fade = fade * fade;
 
     godrays.updateLightScreenPos(ctx.cam, ctx.sunDir);
     godrays.beginOcclusion();
-      // bright sky
-      skyPass.render(ctx);
-      // black occluders
+      // bright sky is already provided by the white clear in beginOcclusion(); do not overdraw with colored sky
+      // black occluders: birds do not need depth; terrain occlusion respects depth
+      com.badlogic.gdx.Gdx.gl.glDisable(com.badlogic.gdx.graphics.GL20.GL_DEPTH_TEST);
       birdsPass.renderOcclusion(ctx);
+      com.badlogic.gdx.Gdx.gl.glEnable(com.badlogic.gdx.graphics.GL20.GL_DEPTH_TEST);
+      com.badlogic.gdx.Gdx.gl.glDepthMask(true);
       terrainPass.renderSolidBlack(ctx);
+      if (ctx.occlusionExtra != null) {
+        try { ctx.occlusionExtra.run(); } catch (Throwable ignored) {}
+      }
     godrays.endOcclusion(Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
 
+    // After using our own FBO for occlusion, rebind the scene FBO so we composite into it
+    try {
+      if (com.badlogic.gdx.Gdx.gl30 != null && ctx.sceneFboHandle != 0) {
+        com.badlogic.gdx.Gdx.gl30.glBindFramebuffer(com.badlogic.gdx.graphics.GL30.GL_FRAMEBUFFER, ctx.sceneFboHandle);
+      }
+    } catch (Throwable ignored) {}
+
+    // Composite rays additively into the scene
     float prev = godrays.exposure;
-    godrays.exposure = prev * exposure * fade;
+    godrays.exposure = Math.max(0.0f, exposure) * fade;
     godrays.compositeAdd(Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
     godrays.exposure = prev;
   }
 
   @Override public void resize(int w, int h) { godrays.resize(w, h); }
   @Override public void dispose() { godrays.dispose(); }
+
+  // no debug helpers
 
   private static float smoothstep(float a, float b, float x) {
     float t = MathUtils.clamp((x - a) / (b - a), 0f, 1f);

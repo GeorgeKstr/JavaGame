@@ -51,11 +51,13 @@ public final class RenderBootstrap {
     marker.setRadius(1.1f);
     marker.setThickness(0.10f);
 
-    // Pipeline order: sky → terrain → rays → birds → marker (marker on top of everything)
+    // Pipeline order: sky → scene-extra (outer LOD) → terrain → birds → rays → marker (marker on top of everything)
+    SceneExtraPass extras = new SceneExtraPass();
     return new RenderPipeline()
         .add(sky)
-        .add(birds)
+        .add(extras)
         .add(terrainPass)
+        .add(birds)
         .add(rays)
         .add(marker);
   }

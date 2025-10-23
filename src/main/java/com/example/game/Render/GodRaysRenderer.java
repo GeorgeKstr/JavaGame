@@ -83,6 +83,10 @@ public class GodRaysRenderer {
 
     /** Composite god rays additively over the backbuffer. */
     public void compositeAdd(int backbufferW, int backbufferH) {
+        // Ensure we draw over the full backbuffer
+        Gdx.gl.glViewport(0, 0, backbufferW, backbufferH);
+        try { Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST); } catch (Throwable ignored) {}
+        try { Gdx.gl.glColorMask(true, true, true, true); } catch (Throwable ignored) {}
         Gdx.gl.glDisable(GL20.GL_DEPTH_TEST);
         Gdx.gl.glEnable(GL20.GL_BLEND);
         Gdx.gl.glBlendFunc(GL20.GL_ONE, GL20.GL_ONE); // additive

@@ -31,12 +31,11 @@ public final class CaptureAreaTool implements Tool {
 
   private final Vector3 center = new Vector3();
   private float halfW = 50f, halfH = 50f, rotDeg = 0f;
-  private float edgeFalloff = 0.5f;
-  private float defaultIntensity = 20f;
+  // No falloff control in Capture: captured stamp is normalized and imported with zero falloff
   private float handleMarginPct = 0.12f;
 
   private Label infoLabel;
-  private Slider wSlider, hSlider, rotSlider, falloffSlider, intensitySlider;
+  private Slider wSlider, hSlider, rotSlider;
   private TextField nameField;
 
   private enum DragMode { NONE, MOVE, RESIZE_L, RESIZE_R, RESIZE_T, RESIZE_B }
@@ -90,15 +89,9 @@ public final class CaptureAreaTool implements Tool {
     rotSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ rotDeg = rotSlider.getValue(); }});
     t.add(rotSlider).width(260).row();
 
-    t.add(new Label("Edge Falloff (0..1)", skin)).left().row();
-    falloffSlider = new Slider(0f, 1f, 0.01f, false, skin); falloffSlider.setValue(edgeFalloff);
-    falloffSlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ edgeFalloff = falloffSlider.getValue(); }});
-    t.add(falloffSlider).width(260).row();
+    // No falloff slider: falloff is always 0 on import
 
-    t.add(new Label("Intensity (m)", skin)).left().row();
-    intensitySlider = new Slider(0.1f, 4000f, 0.1f, false, skin); intensitySlider.setValue(defaultIntensity);
-    intensitySlider.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ defaultIntensity = intensitySlider.getValue(); }});
-    t.add(intensitySlider).width(260).row();
+    // Removed intensity control: captured heightmap is normalized (0..1) and MountainTool controls intensity.
 
     TextButton cap = new TextButton("Capture Area", skin);
     cap.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ capture(); }});
@@ -257,7 +250,6 @@ public final class CaptureAreaTool implements Tool {
     final float cx = center.x, cz = center.z;
     final float hw = Math.max(1f, halfW), hh = Math.max(1f, halfH);
     final float rot = rotDeg;
-    final float edge = Math.max(0f, Math.min(1f, edgeFalloff));
 
     // Run heavy work off the render thread
     new Thread(() -> {
@@ -323,10 +315,10 @@ public final class CaptureAreaTool implements Tool {
             metersBuf[y * res + x] = meters;
           }
         }
-        // Normalize to 0..1 heightmap; store oriented range as intensity
+        // Normalize to 0..1 heightmap; preserve orientation separately
         boolean inverted = (-minMeters > maxMeters);
-        float intensity = inverted ? (-minMeters) : maxMeters;
-        float denom = Math.max(1e-6f, intensity);
+        float orientedPeak = inverted ? (-minMeters) : maxMeters;
+        float denom = Math.max(1e-6f, orientedPeak);
         for (int y = 0; y < res; y++) for (int x = 0; x < res; x++) {
           float meters = metersBuf[y * res + x];
           float m = inverted ? -meters : meters; // ensure non-negative
@@ -391,7 +383,8 @@ public final class CaptureAreaTool implements Tool {
             @Override public void run() {
               float p = terrain.getReloadProgress01();
               if (p >= 0.999f || System.currentTimeMillis() - start > 8000) {
-                mountainTool.addImportedPixmap(pm, imageName, cx, cz, hw, hh, rot, intensity, edge, inverted);
+                // Re-import with intensity computed from mountain peak height (orientedPeak) and zero falloff
+                mountainTool.addImportedPixmap(pm, imageName, cx, cz, hw, hh, rot, orientedPeak, 0f, inverted);
                 EditorContext.requestRefresh("Applying captured heightmap...");
                 terrain.reloadAllChunksAsyncInPlace();
               } else {
