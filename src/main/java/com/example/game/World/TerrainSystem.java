@@ -41,6 +41,11 @@ public class TerrainSystem implements HeightSampler {
     this.picking  = new TerrainPicking(world);
   }
 
+  // Live mountains supplier for tools/samplers (optional; set by editor when mountains tool is present)
+  private java.util.function.Supplier<java.util.List<MountainStamp>> mountainsSupplier;
+  public void setMountainsSupplier(java.util.function.Supplier<java.util.List<MountainStamp>> supplier) { this.mountainsSupplier = supplier; }
+  public java.util.function.Supplier<java.util.List<MountainStamp>> getMountainsSupplier() { return mountainsSupplier; }
+
   // ---------------- Async in-place reload support ----------------
   private static final class ReloadResult {
     final int key; final int cx; final int cz; final boolean defaultFlat;
@@ -784,6 +789,21 @@ public class TerrainSystem implements HeightSampler {
     return new HeightSampler() {
       @Override public float heightAt(float x, float z, float defaultHeight) {
         return sampleBaseHeightAtWorld(x, z, defaultHeight);
+      }
+      @Override public int getSamplesPerSide() { return world.S; }
+      @Override public float getTileSize() { return world.tile; }
+      @Override public float getYScale() { return world.yScale; }
+    };
+  }
+
+  public HeightSampler getBasePlusMountainsSampler() {
+    final java.util.function.Supplier<java.util.List<MountainStamp>> sup = this.mountainsSupplier;
+    final HeightModifier mm = (sup != null) ? new MountainHeightModifier(sup) : null;
+    return new HeightSampler() {
+      @Override public float heightAt(float x, float z, float defaultHeight) {
+        float base = sampleBaseHeightAtWorld(x, z, defaultHeight);
+        float delta = (mm != null) ? mm.deltaAt(x, z) : 0f;
+        return base + delta;
       }
       @Override public int getSamplesPerSide() { return world.S; }
       @Override public float getTileSize() { return world.tile; }

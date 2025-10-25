@@ -58,8 +58,8 @@ public final class SplinesLayer extends BaseToolLayer {
 
     // When chunks change, rebuild ribbons and resync active set (additive listener)
     this.terrain.addChunksChangedListener(() -> {
-      // After chunks load/unload and baking applies, reproject nodes to CURRENT heights (includes mountains/rivers)
-      var hs = this.terrain; // TerrainSystem implements HeightSampler using current heights
+      // After chunks load/unload and baking applies, reproject nodes to BASE+MOUNTAINS heights (ignore river depth)
+      var hs = this.terrain.getBasePlusMountainsSampler();
       for (TerrainSpline s : this.splines) {
         java.util.List<com.example.game.World.Splines.TerrainSplineNode> nodes = s.getNodes();
         for (int i = 0; i < nodes.size(); i++) {
@@ -70,7 +70,7 @@ public final class SplinesLayer extends BaseToolLayer {
           }
         }
         s.markRibbonDirty();
-        s.rebuildRibbonAsync(this.terrain, 2);
+        s.rebuildRibbonAsync(hs, 2);
       }
       resyncActiveSplinesAsync();
       // Stage latest catalog so a subsequent save writes splines into the map
