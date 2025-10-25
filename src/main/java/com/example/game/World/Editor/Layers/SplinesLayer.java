@@ -90,9 +90,7 @@ public final class SplinesLayer extends BaseToolLayer {
   }
 
   @Override public void render3D(Camera cam) {
-    // Always draw ribbons for context
-    renderRibbonsOnly(cam);
-    // Then let the active tool draw its overlays (e.g., RiverTool nodes/lines) when this layer is active
+    // Draw only the active tool overlays in the backbuffer UI pass; ribbons are rendered in-scene via SplinesPass
     super.render3D(cam);
   }
 

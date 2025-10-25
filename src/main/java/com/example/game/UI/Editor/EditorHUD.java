@@ -35,8 +35,8 @@ public final class EditorHUD implements Disposable {
   private final Table leftPane = new Table();
   private final Table rightPane = new Table();
 
-  private Label hourLabel, raysLabel, distanceLabel, fpsLabel;
-  private Slider hourSlider, raysSlider, distanceSlider;
+  private Label hourLabel, distanceLabel, fpsLabel;
+  private Slider hourSlider, distanceSlider;
   private TextField selectedPlaceableField;
   private long lastSelectedId = Long.MIN_VALUE;
   private String lastSelectedName = null;
@@ -137,44 +137,7 @@ public final class EditorHUD implements Disposable {
     });
     parent.add(hourSlider).width(240).height(32).padBottom(8).row();
 
-    final Label sizeLbl = new Label(String.format("Sun Size: %.2f°", initialSunSize), skin);
-    parent.add(sizeLbl).left().padTop(8).row();
-    final Slider sizeSlider = new Slider(0.3f, 3.0f, 0.01f, false, skin);
-    sizeSlider.setValue(initialSunSize);
-    sizeSlider.addListener(new ChangeListener() {
-      @Override public void changed(ChangeEvent event, Actor actor) {
-        float v = sizeSlider.getValue();
-        sizeLbl.setText(String.format("Sun Size: %.2f°", v));
-        cb.onSunSizeChanged(v);
-      }
-    });
-    parent.add(sizeSlider).width(240).height(32).row();
-
-    final Label warmLbl = new Label(String.format("Warmth: %.2f", initialWarmth), skin);
-    parent.add(warmLbl).left().padTop(8).row();
-    final Slider warmSlider = new Slider(0f, 1f, 0.01f, false, skin);
-    warmSlider.setValue(initialWarmth);
-    warmSlider.addListener(new ChangeListener() {
-      @Override public void changed(ChangeEvent event, Actor actor) {
-        float v = warmSlider.getValue();
-        warmLbl.setText(String.format("Warmth: %.2f", v));
-        cb.onWarmthChanged(v);
-      }
-    });
-    parent.add(warmSlider).width(240).height(32).row();
-
-    raysLabel = new Label(String.format("God Rays: %.2f", initialRays), skin);
-    parent.add(raysLabel).left().padTop(8).row();
-    raysSlider = new Slider(0f, 1.5f, 0.01f, false, skin);
-    raysSlider.setValue(initialRays);
-    raysSlider.addListener(new ChangeListener() {
-      @Override public void changed(ChangeEvent event, Actor actor) {
-        float v = raysSlider.getValue();
-        raysLabel.setText(String.format("God Rays: %.2f", v));
-        cb.onGodRaysChanged(v);
-      }
-    });
-    parent.add(raysSlider).width(240).height(32).row();
+    // Removed Sun Size, Warmth, and God Rays sliders from right panel. These are now managed elsewhere.
 
     distanceLabel = new Label("Render Distance: " + initialDist, skin);
     parent.add(distanceLabel).left().padTop(8).row();

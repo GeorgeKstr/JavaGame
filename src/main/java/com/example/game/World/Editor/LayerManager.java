@@ -59,14 +59,6 @@ public final class LayerManager {
 
   /** 3D overlays/gizmos for the active layer. */
   public void render3D(Camera cam) {
-    // Always draw spline ribbons for context (no overlays) when not on the Splines layer
-    if (active == null || !"splines".equals(active.id())) {
-      EditorLayer spl = byId.get("splines");
-      if (spl instanceof com.example.game.World.Editor.Layers.SplinesLayer) {
-        ((com.example.game.World.Editor.Layers.SplinesLayer)spl).renderRibbonsOnly(cam);
-      }
-    }
-
     if (active != null) {
       // Active layer renders its own overlays. If it's SplinesLayer, it will render ribbons + overlays itself.
       active.render3D(cam);

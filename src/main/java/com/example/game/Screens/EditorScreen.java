@@ -22,9 +22,11 @@ import com.example.game.World.NewMapCreator;
 import com.example.game.World.TerrainSystem;
 import com.example.game.World.Editor.*;
 import com.example.game.World.Editor.Layers.TerrainLayer;
+import com.example.game.World.Editor.Layers.AtmosphereLayer;
 import com.example.game.World.Editor.Layers.WalkLayer;
 import com.example.game.World.Editor.Layers.SplinesLayer;
 import com.example.game.World.Editor.Layers.HeightmapsLayer;
+import com.example.game.Render.Passes.SplinesPass;
 import com.example.game.Render.Pipeline.RenderBootstrap;
 import com.example.game.Config.Settings;
 import com.example.game.Config.cvar.CVars;
@@ -72,6 +74,71 @@ public class EditorScreen implements Screen {
   // Blit resources (present FBO with gamma correction)
   private com.badlogic.gdx.graphics.Mesh blitQuad;
   private com.badlogic.gdx.graphics.glutils.ShaderProgram blitProg;
+  // Eye adaptation resources
+  private com.badlogic.gdx.graphics.glutils.FrameBuffer adaptFbo; // 1x1 luminance target
+  private com.badlogic.gdx.graphics.glutils.ShaderProgram adaptProg; // writes luminance
+  private java.nio.ByteBuffer adaptBuf;
+  private float eyeExposure = 1f; // smoothed exposure baseline
+  private float eyeTarget = 1f;
+  private float eyeRateUp = 7.0f;   // faster increase (entering dark)
+  private float eyeRateDown = 1.0f; // slow decrease (glare when entering bright)
+  private float lumSmoothed = 0.2f; // smoothed luminance (0..1)
+  private float lumRate = 2.0f;     // luminance smoothing rate
+  // Exposed adaptation parameters
+  private float eyeKey = 0.18f;     // target mid-gray
+  private float eyeMinExp = 0.75f;  // min exposure clamp
+  private float eyeMaxExp = 1.50f;  // max exposure clamp
+  private float eyeMaxStep = 0.08f; // per-frame exposure change cap
+
+  public void setEyeAdaptation(float key, float minExp, float maxExp, float rateUp, float rateDown, float lumSmoothRate, float maxStep) {
+    this.eyeKey = key;
+    this.eyeMinExp = minExp;
+    this.eyeMaxExp = maxExp;
+    this.eyeRateUp = rateUp;
+    this.eyeRateDown = rateDown;
+    this.lumRate = lumSmoothRate;
+    this.eyeMaxStep = maxStep;
+  }
+
+  /** Persist current camera states (RTS and FPS) to CVars so they survive restarts. */
+  private void persistCameraCVars() {
+    try {
+      if (edCam != null) {
+        com.example.game.World.Editor.EditorCamera.State s = edCam.getState();
+        if (s != null && s.pivot != null) {
+          CVars.EDITOR_CAM_PIVOT_X.set(s.pivot.x);
+          CVars.EDITOR_CAM_PIVOT_Y.set(s.pivot.y);
+          CVars.EDITOR_CAM_PIVOT_Z.set(s.pivot.z);
+          CVars.EDITOR_CAM_YAW_DEG.set(s.yawDeg);
+          CVars.EDITOR_CAM_PITCH_DEG.set(s.pitchDeg);
+          CVars.EDITOR_CAM_DISTANCE.set(s.distance);
+        }
+      }
+      if (fpsCam != null) {
+        com.example.game.World.Editor.FpsCameraController.State s2 = fpsCam.getState();
+        if (s2 != null && s2.pos != null) {
+          CVars.FPS_CAM_X.set(s2.pos.x);
+          CVars.FPS_CAM_Y.set(s2.pos.y);
+          CVars.FPS_CAM_Z.set(s2.pos.z);
+          CVars.FPS_CAM_YAW_DEG.set(s2.yawDeg);
+          CVars.FPS_CAM_PITCH_DEG.set(s2.pitchDeg);
+        }
+      }
+    } catch (Throwable ignored) {}
+  }
+  public void setEyeKey(float v){ this.eyeKey = v; }
+  public void setEyeMinExp(float v){ this.eyeMinExp = v; }
+  public void setEyeMaxExp(float v){ this.eyeMaxExp = v; }
+  public void setEyeRates(float up, float down){ this.eyeRateUp = up; this.eyeRateDown = down; }
+  public void setEyeLumRate(float v){ this.lumRate = v; }
+  public void setEyeMaxStep(float v){ this.eyeMaxStep = v; }
+  public float getEyeKey(){ return eyeKey; }
+  public float getEyeMinExp(){ return eyeMinExp; }
+  public float getEyeMaxExp(){ return eyeMaxExp; }
+  public float getEyeRateUp(){ return eyeRateUp; }
+  public float getEyeRateDown(){ return eyeRateDown; }
+  public float getEyeLumRate(){ return lumRate; }
+  public float getEyeMaxStep(){ return eyeMaxStep; }
   private void ensureBlitResources() {
     if (blitQuad == null) {
       float[] v = {
@@ -99,11 +166,168 @@ public class EditorScreen implements Screen {
       String fsrc = "#ifdef GL_ES\nprecision mediump float;\n#endif\n"+
                     "varying vec2 v_uv;\n"+
                     "uniform sampler2D u_tex;\n"+
-                    "uniform float u_gamma;\n"+
-                    "void main(){ vec3 c = texture2D(u_tex, v_uv).rgb; c = pow(c, vec3(u_gamma)); gl_FragColor = vec4(c, 1.0); }";
+                    "uniform float u_eyeExposure;\n"+
+                    "uniform float u_baseExposure;\n"+
+                    "uniform float u_saturation;\n"+
+                    "uniform float u_contrast;\n"+
+                    "uniform float u_enableFxaa;\n"+
+                    "uniform vec2  u_invResolution;\n"+
+                    "uniform float u_fxaaSubpix;\n"+
+                    "uniform float u_fxaaEdgeThreshold;\n"+
+                    "uniform float u_fxaaEdgeThresholdMin;\n"+
+                    "uniform float u_fxaaStrength;\n"+
+                    "vec3 uncharted2Tonemap(vec3 x){\n"+
+                    "  const float A=0.22; const float B=0.30; const float C=0.10; const float D=0.20; const float E=0.01; const float F=0.30;\n"+
+                    "  return ((x*(A*x+C*B)+D*E)/(x*(A*x+B)+D*F)) - E/F;\n"+
+                    "}\n"+
+                    "vec3 applyTonemap(vec3 c, float exposure){\n"+
+                    "  c *= exposure;\n"+
+                    "  float W = 11.2;\n"+
+                    "  vec3 curr = uncharted2Tonemap(c);\n"+
+                    "  vec3 white = vec3(uncharted2Tonemap(vec3(W)));\n"+
+                    "  c = curr / white;\n"+
+                    "  float yl = dot(c, vec3(0.2126,0.7152,0.0722));\n"+
+                    "  c = mix(vec3(yl), c, u_saturation);\n"+
+                    "  c = (c - 0.5) * u_contrast + 0.5;\n"+
+                    "  return clamp(c, 0.0, 1.0);\n"+
+                    "}\n"+
+                    "float luma(vec3 c){ return dot(c, vec3(0.299, 0.587, 0.114)); }\n"+
+                    "vec3 fxaaTonemapped(sampler2D tex, vec2 uv, float exposure) {\n"+
+                    "  vec2 px = u_invResolution;\n"+
+                    "  vec3 rgbNW = applyTonemap(texture2D(tex, uv + vec2(-px.x, -px.y)).rgb, exposure);\n"+
+                    "  vec3 rgbNE = applyTonemap(texture2D(tex, uv + vec2( px.x, -px.y)).rgb, exposure);\n"+
+                    "  vec3 rgbSW = applyTonemap(texture2D(tex, uv + vec2(-px.x,  px.y)).rgb, exposure);\n"+
+                    "  vec3 rgbSE = applyTonemap(texture2D(tex, uv + vec2( px.x,  px.y)).rgb, exposure);\n"+
+                    "  vec3 rgbM  = applyTonemap(texture2D(tex, uv).rgb, exposure);\n"+
+                    "  float lumaNW = luma(rgbNW);\n"+
+                    "  float lumaNE = luma(rgbNE);\n"+
+                    "  float lumaSW = luma(rgbSW);\n"+
+                    "  float lumaSE = luma(rgbSE);\n"+
+                    "  float lumaM  = luma(rgbM);\n"+
+                    "  float lumaMin = min(lumaM, min(min(lumaNW, lumaNE), min(lumaSW, lumaSE)));\n"+
+                    "  float lumaMax = max(lumaM, max(max(lumaNW, lumaNE), max(lumaSW, lumaSE)));\n"+
+                    "  float range = lumaMax - lumaMin;\n"+
+                    "  if (range < max(u_fxaaEdgeThresholdMin, lumaMax * u_fxaaEdgeThreshold)) return rgbM;\n"+
+                    "  vec2 dir;\n"+
+                    "  dir.x = -((lumaNW + lumaNE) - (lumaSW + lumaSE));\n"+
+                    "  dir.y =  ((lumaNW + lumaSW) - (lumaNE + lumaSE));\n"+
+                    "  float dirReduce = max((lumaNW + lumaNE + lumaSW + lumaSE) * (0.25 * u_fxaaSubpix), 1.0/128.0);\n"+
+                    "  float rcpDirMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);\n"+
+                    "  dir = clamp(dir * rcpDirMin, vec2(-8.0), vec2(8.0)) * px;\n"+
+                    "  vec3 rgbA = 0.5 * (\n"+
+                    "    texture2D(tex, uv + dir * (1.0/3.0 - 0.5)).rgb +\n"+
+                    "    texture2D(tex, uv + dir * (2.0/3.0 - 0.5)).rgb);\n"+
+                    "  rgbA = applyTonemap(rgbA, 1.0);\n"+
+                    "  vec3 rgbB = rgbA * 0.5 + 0.25 * (\n"+
+                    "    texture2D(tex, uv + dir * -0.5).rgb +\n"+
+                    "    texture2D(tex, uv + dir * 0.5).rgb);\n"+
+                    "  rgbB = applyTonemap(rgbB, 1.0);\n"+
+                    "  float lumaB = luma(rgbB);\n"+
+                    "  if (lumaB < lumaMin || lumaB > lumaMax) return rgbA; else return rgbB;\n"+
+                    "}\n"+
+                    "void main(){\n"+
+                    "  float exposure = max(0.0, u_eyeExposure) * max(0.0, u_baseExposure);\n"+
+                    "  vec3 c = applyTonemap(texture2D(u_tex, v_uv).rgb, exposure);\n"+
+                    "  if (u_enableFxaa > 0.5) {\n"+
+                    "    vec3 aa = fxaaTonemapped(u_tex, v_uv, exposure);\n"+
+                    "    // Blend to reduce outline strength\n"+
+                    "    float k = clamp(u_fxaaStrength, 0.0, 1.0);\n"+
+                    "    c = mix(c, aa, k);\n"+
+                    "  }\n"+
+                    "  gl_FragColor = vec4(c, 1.0);\n"+
+                    "}";
       blitProg = new com.badlogic.gdx.graphics.glutils.ShaderProgram(vsrc, fsrc);
       if (!blitProg.isCompiled()) throw new IllegalStateException(blitProg.getLog());
     }
+  }
+
+  private void ensureAdaptationResources() {
+    if (adaptFbo == null) {
+      adaptFbo = new GLFrameBuffer.FrameBufferBuilder(1, 1)
+          .addBasicColorTextureAttachment(Pixmap.Format.RGBA8888)
+          .build();
+    }
+    if (adaptProg == null) {
+      com.badlogic.gdx.graphics.glutils.ShaderProgram.pedantic = false;
+      String vsrc = "attribute vec2 a_position;\n"+
+                    "attribute vec2 a_texCoord0;\n"+
+                    "varying vec2 v_uv;\n"+
+                    "void main(){ v_uv=a_texCoord0; gl_Position=vec4(a_position,0.0,1.0); }";
+      // Center-weighted log-average luminance over a 4x4 grid to avoid binary behavior
+      String fsrc = "#ifdef GL_ES\nprecision mediump float;\n#endif\n"+
+                    "varying vec2 v_uv;\n"+
+                    "uniform sampler2D u_tex;\n"+
+                    "float lum(vec3 c){ return dot(c, vec3(0.2126,0.7152,0.0722)); }\n"+
+                    "void main(){\n"+
+                    "  const int N = 4;\n"+
+                    "  float sumLogW = 0.0;\n"+
+                    "  float sumW = 0.0;\n"+
+                    "  const float eps = 1e-4;\n"+
+                    "  const float sigma = 0.25;\n"+
+                    "  for (int j=0;j<N;j++){\n"+
+                    "    for (int i=0;i<N;i++){\n"+
+                    "      vec2 uv = (vec2(float(i)+0.5, float(j)+0.5) / float(N));\n"+
+                    "      vec2 d = uv - vec2(0.5);\n"+
+                    "      float w = exp(-dot(d,d)/(2.0*sigma*sigma));\n"+
+                    "      vec3 c = texture2D(u_tex, uv).rgb;\n"+
+                    "      float l = lum(c);\n"+
+                    "      sumLogW += w * log(max(l, eps));\n"+
+                    "      sumW += w;\n"+
+                    "    }\n"+
+                    "  }\n"+
+                    "  float avgLog = exp(sumLogW / max(sumW, eps));\n"+
+                    "  gl_FragColor = vec4(avgLog, avgLog, avgLog, 1.0);\n"+
+                    "}";
+      adaptProg = new com.badlogic.gdx.graphics.glutils.ShaderProgram(vsrc, fsrc);
+      if (!adaptProg.isCompiled()) throw new IllegalStateException(adaptProg.getLog());
+    }
+    if (adaptBuf == null) {
+      adaptBuf = java.nio.ByteBuffer.allocateDirect(4); // 1x1 RGBA8
+      adaptBuf.order(java.nio.ByteOrder.nativeOrder());
+    }
+  }
+
+  private void updateEyeAdaptation(float dt) {
+    ensureAdaptationResources();
+    // Ensure fullscreen quad is available for the 1x1 draw
+    ensureBlitResources();
+    if (blitQuad == null) return;
+    // Read robust pre-tonemap luminance stats measured in HDRPrePass
+    float lum = MathUtils.clamp(ctx.hdrLuminanceRef, 0f, 1f);
+
+    // Smooth luminance to avoid binary spikes when tilting
+    float lk = 1f - (float)Math.exp(-lumRate * Math.max(0f, dt));
+    lumSmoothed += (lum - lumSmoothed) * lk;
+
+    // Key-based auto-exposure: target exposure drives scene mid-gray toward key
+    float eps = 1e-4f;
+    float baseTarget = MathUtils.clamp(eyeKey / (lumSmoothed + eps), eyeMinExp, eyeMaxExp);
+    // Highlight-preserve: compute from high percentile and blend based on bright coverage
+    float l98 = MathUtils.clamp(ctx.hdrLuminanceP98, 0f, 1f);
+    float hiTarget = MathUtils.clamp(eyeKey / (l98 + eps), eyeMinExp, eyeMaxExp);
+    float brightFrac = MathUtils.clamp(ctx.hdrBrightFrac, 0f, 1f);
+    // Map brightFrac into blend factor t in [0..0.6]
+    float t = MathUtils.clamp((brightFrac - 0.02f) / 0.15f, 0f, 1f) * 0.6f;
+    eyeTarget = MathUtils.lerp(baseTarget, hiTarget, t);
+
+    // Asymmetric adaptation: fast brighten (target>current), slow darken (target<current) for glare
+    float rate = (eyeTarget > eyeExposure) ? eyeRateUp : eyeRateDown;
+    float k = 1f - (float)Math.exp(-rate * Math.max(0f, dt));
+    float prevExp = eyeExposure;
+    float proposed = eyeExposure + (eyeTarget - eyeExposure) * k;
+    // Per-frame EV clamp: |ΔEV| <= 0.4
+    float evPrev = (float)(Math.log(Math.max(1e-6f, prevExp)) / Math.log(2));
+    float evProp = (float)(Math.log(Math.max(1e-6f, proposed)) / Math.log(2));
+    float maxEvDelta = 0.4f;
+    float evClamped = MathUtils.clamp(evProp, evPrev - maxEvDelta, evPrev + maxEvDelta);
+    eyeExposure = (float)Math.pow(2, evClamped);
+    // Also clamp linear step as a safety net
+    float maxStep = eyeMaxStep;
+    if (eyeExposure > prevExp + maxStep) eyeExposure = prevExp + maxStep;
+    if (eyeExposure < prevExp - maxStep) eyeExposure = prevExp - maxStep;
+    // No explicit baseline drift; target already pulls exposure based on measured luminance
+    // Store to context for use by other passes if needed
+    ctx.eyeExposure = eyeExposure;
   }
 
   // Draw outer LOD as solid black occluders into the currently bound framebuffer (for god rays occlusion)
@@ -589,10 +813,27 @@ public class EditorScreen implements Screen {
     this.edCam.setTerrainForRaycast(terrain);
     this.edCam.setClampToGround(false);
     this.edCam.setLockPivotYZero(true);
+    // Load RTS editor camera state from CVars
+    {
+      com.example.game.World.Editor.EditorCamera.State s = new com.example.game.World.Editor.EditorCamera.State();
+      s.pivot.set(CVars.EDITOR_CAM_PIVOT_X.get(), CVars.EDITOR_CAM_PIVOT_Y.get(), CVars.EDITOR_CAM_PIVOT_Z.get());
+      s.yawDeg = CVars.EDITOR_CAM_YAW_DEG.get();
+      s.pitchDeg = CVars.EDITOR_CAM_PITCH_DEG.get();
+      s.distance = CVars.EDITOR_CAM_DISTANCE.get();
+      this.edCam.setState(s);
+    }
     // FPS controller init
     this.fpsCam = new com.example.game.World.Editor.FpsCameraController();
     // Make FPS camera follow ground (y = terrain height + eye)
     this.fpsCam.setHeightSampler(terrain);
+    // Load FPS camera state from CVars
+    {
+      com.example.game.World.Editor.FpsCameraController.State s = new com.example.game.World.Editor.FpsCameraController.State();
+      s.pos.set(CVars.FPS_CAM_X.get(), CVars.FPS_CAM_Y.get(), CVars.FPS_CAM_Z.get());
+      s.yawDeg = CVars.FPS_CAM_YAW_DEG.get();
+      s.pitchDeg = CVars.FPS_CAM_PITCH_DEG.get();
+      this.fpsCam.setState(s);
+    }
     // Seed states
     this.rtsState = edCam.getState();
     this.fpsState = fpsCam.getState();
@@ -615,6 +856,33 @@ public class EditorScreen implements Screen {
     pipeline.get(TerrainPass.class).setViewRadius(CVars.VIEW_RADIUS_CHUNKS.get());
 
     // Follow CVars automatically (cross-screen sync)
+    // HDR tonemap
+    HDRPrePass hdrPass = pipeline.get(HDRPrePass.class);
+    if (hdrPass != null) {
+      hdrPass.setExposure(CVars.HDR_EXPOSURE.get());
+      hdrPass.setSaturation(CVars.HDR_SATURATION.get());
+      hdrPass.setContrast(CVars.HDR_CONTRAST.get());
+    }
+    CVars.HDR_EXPOSURE.onChanged(v -> { if (hdrPass != null && v != null) hdrPass.setExposure(v); });
+    CVars.HDR_SATURATION.onChanged(v -> { if (hdrPass != null && v != null) hdrPass.setSaturation(v); });
+    CVars.HDR_CONTRAST.onChanged(v -> { if (hdrPass != null && v != null) hdrPass.setContrast(v); });
+
+    // Eye adaptation
+    setEyeAdaptation(
+        CVars.EYE_KEY.get(),
+        CVars.EYE_MIN_EXP.get(),
+        CVars.EYE_MAX_EXP.get(),
+        CVars.EYE_RATE_UP.get(),
+        CVars.EYE_RATE_DOWN.get(),
+        CVars.EYE_LUM_RATE.get(),
+        CVars.EYE_MAX_STEP.get());
+    CVars.EYE_KEY.onChanged(v -> { if (v!=null) setEyeKey(v); });
+    CVars.EYE_MIN_EXP.onChanged(v -> { if (v!=null) setEyeMinExp(v); });
+    CVars.EYE_MAX_EXP.onChanged(v -> { if (v!=null) setEyeMaxExp(v); });
+    CVars.EYE_RATE_UP.onChanged(v -> { if (v!=null) setEyeRates(v, getEyeRateDown()); });
+    CVars.EYE_RATE_DOWN.onChanged(v -> { if (v!=null) setEyeRates(getEyeRateUp(), v); });
+    CVars.EYE_LUM_RATE.onChanged(v -> { if (v!=null) setEyeLumRate(v); });
+    CVars.EYE_MAX_STEP.onChanged(v -> { if (v!=null) setEyeMaxStep(v); });
     CVars.RENDER_SUN_SIZE_DEG.onChanged(v -> {
       float val = v == null ? 1.5f : v;
       pipeline.get(SkyPass.class).setSunSizeDeg(val);
@@ -642,11 +910,15 @@ public class EditorScreen implements Screen {
     CVars.RENDER_SHOW_OUTER_LOD.onChanged(v -> showOuterLod = Boolean.TRUE.equals(v));
 
     // HUD
+    // Atmosphere & Post stack controls (new layer with sliders)
+    layers.add(new AtmosphereLayer(pipeline, this));
     terrainLayerRef = new TerrainLayer(terrain, hud.skin());
     layers.add(terrainLayerRef);
     layers.add(new WalkLayer(terrain, hud.skin(), fpsCam));
     splinesLayerRef = new SplinesLayer(terrain, hud.skin());
     layers.add(splinesLayerRef);
+    // Ensure spline ribbons are rendered inside the scene FBO so terrain depth occludes them
+    pipeline.insertAfter(TerrainPass.class, new SplinesPass(splinesLayerRef));
     // New: heightmaps layer hosting heightmap import and related tools
     heightmapsLayerRef = new HeightmapsLayer(terrain, hud.skin());
     layers.add(heightmapsLayerRef);
@@ -781,12 +1053,13 @@ public class EditorScreen implements Screen {
       useFps = "Roam".equals(tn);
     }
     if (useFps) { fpsCam.update(cam); } else { edCam.update(cam); }
+    // Persist camera states to CVars each frame
+    persistCameraCVars();
     var f = edCam.focus();
     terrain.updateAndStream(f.x, f.z);
     // Apply a few async chunk reload results per frame to smooth allocations
     terrain.applyPendingReloads(4);
     layers.update(dt, hud.skin());
-    layers.render3D(cam);
 
     // Loading overlay tick (poll streaming progress without blocking)
     tickLoading();
@@ -803,8 +1076,9 @@ public class EditorScreen implements Screen {
     // Allow passes to render extra occluders (outer LOD) and insert LOD between Sky and Terrain
     ctx.occlusionExtra = showOuterLod ? this::drawNonLoadedChunkPreviewsOcclusion : null;
     ctx.sceneExtraBeforeTerrain = showOuterLod ? this::drawNonLoadedChunkPreviews : null;
-    // Provide scene FBO handle so passes (e.g., GodRays) can restore it after their own FBOs
+    // Provide scene FBO handle and color texture so passes can sample/restore
     try { ctx.sceneFboHandle = fbo.getFramebufferHandle(); } catch (Throwable ignored) {}
+    try { ctx.sceneColorTex = fbo.getColorBufferTexture(); } catch (Throwable ignored) {}
     pipeline.update(dt, ctx);
     fbo.begin();
     // viewport matches FBO size (same as window in our buildFbo)
@@ -825,7 +1099,10 @@ public class EditorScreen implements Screen {
     pipeline.render(ctx);
     fbo.end();
 
-    // Blit FBO color to backbuffer with gamma correction
+    // Eye adaptation: measure scene luminance and update exposure
+    updateEyeAdaptation(dt);
+
+    // Blit FBO color to backbuffer with gamma correction and exposure
     Gdx.gl.glDisable(GL20.GL_DEPTH_TEST);
     try { Gdx.gl.glDisable(GL20.GL_BLEND); } catch (Throwable ignored) {}
     try { Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST); } catch (Throwable ignored) {}
@@ -834,7 +1111,18 @@ public class EditorScreen implements Screen {
     ensureBlitResources();
     blitProg.bind();
     blitProg.setUniformi("u_tex", 0);
-    blitProg.setUniformf("u_gamma", 1.0f);
+    // HDR tonemap parameters come from CVars (kept in sync already)
+    blitProg.setUniformf("u_eyeExposure", eyeExposure);
+    blitProg.setUniformf("u_baseExposure", CVars.HDR_EXPOSURE.get());
+    blitProg.setUniformf("u_saturation", CVars.HDR_SATURATION.get());
+    blitProg.setUniformf("u_contrast", CVars.HDR_CONTRAST.get());
+    // FXAA toggles and params
+    float enableFxaa = Boolean.TRUE.equals(CVars.AA_FXAA_ENABLED.get()) ? 1f : 0f;
+    blitProg.setUniformf("u_enableFxaa", enableFxaa);
+    blitProg.setUniformf("u_invResolution", 1f / Math.max(1, Gdx.graphics.getWidth()), 1f / Math.max(1, Gdx.graphics.getHeight()));
+    blitProg.setUniformf("u_fxaaSubpix", CVars.AA_FXAA_SUBPIX.get());
+    blitProg.setUniformf("u_fxaaEdgeThreshold", CVars.AA_FXAA_EDGE_THRESH.get());
+    blitProg.setUniformf("u_fxaaEdgeThresholdMin", CVars.AA_FXAA_EDGE_THRESH_MIN.get());
     Gdx.gl.glActiveTexture(GL20.GL_TEXTURE0);
     fbo.getColorBufferTexture().bind();
     blitQuad.render(blitProg, GL20.GL_TRIANGLES);

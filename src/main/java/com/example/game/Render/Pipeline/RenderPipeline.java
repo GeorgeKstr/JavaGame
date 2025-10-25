@@ -25,6 +25,30 @@ public final class RenderPipeline {
     return null;
   }
 
+  /** Insert a pass immediately after the first pass of the given type (no-op if anchor not found). */
+  public RenderPipeline insertAfter(Class<? extends RenderPass> anchorType, RenderPass pass) {
+    if (pass == null) return this;
+    for (int i = 0; i < passes.size(); i++) {
+      if (anchorType.isInstance(passes.get(i))) {
+        passes.add(i + 1, pass);
+        return this;
+      }
+    }
+    return this; // no-op if not found
+  }
+
+  /** Insert a pass immediately before the first pass of the given type (no-op if anchor not found). */
+  public RenderPipeline insertBefore(Class<? extends RenderPass> anchorType, RenderPass pass) {
+    if (pass == null) return this;
+    for (int i = 0; i < passes.size(); i++) {
+      if (anchorType.isInstance(passes.get(i))) {
+        passes.add(i, pass);
+        return this;
+      }
+    }
+    return this;
+  }
+
   /** Optional strict version if you prefer exceptions: */
   public <T extends RenderPass> T getOrThrow(Class<T> type) {
     T found = get(type);

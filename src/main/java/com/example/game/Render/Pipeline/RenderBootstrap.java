@@ -41,6 +41,13 @@ public final class RenderBootstrap {
     birds.setCenterRepel(cfg.birdsCenterRepel);
     birds.setHorizonBias(cfg.birdsHorizonBias);
 
+    // HDR pre-pass (tonemap before god rays)
+    HDRPrePass hdr = new HDRPrePass();
+    hdr.init(Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
+    hdr.setExposure(0.9f);
+    hdr.setSaturation(1.08f);
+    hdr.setContrast(1.06f);
+
     GodRaysPass rays = new GodRaysPass(sky, terrainPass, birds); rays.init(Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
     // Rays exposure
     rays.setExposure(cfg.raysExposure);
@@ -51,14 +58,19 @@ public final class RenderBootstrap {
     marker.setRadius(1.1f);
     marker.setThickness(0.10f);
 
-    // Pipeline order: sky → scene-extra (outer LOD) → terrain → birds → rays → marker (marker on top of everything)
+    // Pipeline order: sky → scene-extra (outer LOD) → terrain → splines → HDR → birds → rays → marker (marker on top)
     SceneExtraPass extras = new SceneExtraPass();
-    return new RenderPipeline()
+
+    RenderPipeline rp = new RenderPipeline()
         .add(sky)
         .add(extras)
-        .add(terrainPass)
-        .add(birds)
-        .add(rays)
-        .add(marker);
+        .add(terrainPass);
+    // Add splines pass here if available (Editor will attach it when layer exists)
+    // rp.add(new SplinesPass(splinesLayer));
+    rp.add(hdr)
+      .add(birds)
+      .add(rays)
+      .add(marker);
+    return rp;
   }
 }
