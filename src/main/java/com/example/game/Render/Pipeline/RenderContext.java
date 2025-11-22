@@ -16,6 +16,8 @@ public final class RenderContext {
   public int sceneFboHandle = 0;
   // Scene color texture bound to the scene FBO
   public Texture sceneColorTex;
+  // Scene depth texture bound to the scene FBO (for depth-aware post)
+  public Texture sceneDepthTex;
   // Eye adaptation exposure to apply during post (1 = no change)
   public float eyeExposure = 1f;
   // Pre-tonemap, center-weighted log-average luminance measured in HDRPrePass (0..1)

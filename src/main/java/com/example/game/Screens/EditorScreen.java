@@ -5,6 +5,7 @@ import com.badlogic.gdx.graphics.*;
 import com.badlogic.gdx.graphics.glutils.FrameBuffer;
 import com.badlogic.gdx.graphics.glutils.GLFrameBuffer;
 import com.badlogic.gdx.graphics.glutils.GLFrameBuffer.FrameBufferBuilder;
+import com.badlogic.gdx.graphics.GL30;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.math.MathUtils;
@@ -394,7 +395,8 @@ public class EditorScreen implements Screen {
     }
     FrameBufferBuilder builder = new GLFrameBuffer.FrameBufferBuilder(width, height);
     builder.addBasicColorTextureAttachment(Pixmap.Format.RGBA8888);
-    builder.addDepthRenderBuffer(GL30.GL_DEPTH_COMPONENT24);
+    // Use a depth texture so post effects can sample depth
+    builder.addDepthTextureAttachment(GL30.GL_DEPTH_COMPONENT24, GL20.GL_UNSIGNED_INT);
     fbo = builder.build();
     // Build/update a flipped region of the FBO color buffer for screen drawing
     Texture tex = fbo.getColorBufferTexture();
@@ -402,6 +404,28 @@ public class EditorScreen implements Screen {
     try { tex.setWrap(Texture.TextureWrap.ClampToEdge, Texture.TextureWrap.ClampToEdge); } catch (Throwable ignored) {}
     fboRegion = new TextureRegion(tex);
     fboRegion.flip(false, true);
+  }
+
+  // ------------------------------------------------------------
+  // Depth texture helper (supports multiple libGDX versions)
+  // ------------------------------------------------------------
+  private Texture tryGetDepthTexture(FrameBuffer fb) {
+    if (fb == null) return null;
+    try {
+      // Common newer API
+      java.lang.reflect.Method m = fb.getClass().getMethod("getDepthBufferTexture");
+      Object tex = m.invoke(fb);
+      return (tex instanceof Texture) ? (Texture) tex : null;
+    } catch (Throwable ignored) {
+      try {
+        // Alternate name in some versions
+        java.lang.reflect.Method m2 = fb.getClass().getMethod("getDepthTexture");
+        Object tex2 = m2.invoke(fb);
+        return (tex2 instanceof Texture) ? (Texture) tex2 : null;
+      } catch (Throwable ignored2) {
+        return null;
+      }
+    }
   }
 
   // ------------------------------------------------------------
@@ -911,7 +935,7 @@ public class EditorScreen implements Screen {
 
     // HUD
     // Atmosphere & Post stack controls (new layer with sliders)
-    layers.add(new AtmosphereLayer(pipeline, this));
+    layers.add(new AtmosphereLayer(pipeline, this, terrain));
     terrainLayerRef = new TerrainLayer(terrain, hud.skin());
     layers.add(terrainLayerRef);
     layers.add(new WalkLayer(terrain, hud.skin(), fpsCam));
@@ -1079,6 +1103,7 @@ public class EditorScreen implements Screen {
     // Provide scene FBO handle and color texture so passes can sample/restore
     try { ctx.sceneFboHandle = fbo.getFramebufferHandle(); } catch (Throwable ignored) {}
     try { ctx.sceneColorTex = fbo.getColorBufferTexture(); } catch (Throwable ignored) {}
+    try { ctx.sceneDepthTex = tryGetDepthTexture(fbo); } catch (Throwable ignored) {}
     pipeline.update(dt, ctx);
     fbo.begin();
     // viewport matches FBO size (same as window in our buildFbo)

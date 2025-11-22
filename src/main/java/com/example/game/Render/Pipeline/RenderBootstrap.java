@@ -41,12 +41,9 @@ public final class RenderBootstrap {
     birds.setCenterRepel(cfg.birdsCenterRepel);
     birds.setHorizonBias(cfg.birdsHorizonBias);
 
-    // HDR pre-pass (tonemap before god rays)
-    HDRPrePass hdr = new HDRPrePass();
-    hdr.init(Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
-    hdr.setExposure(0.9f);
-    hdr.setSaturation(1.08f);
-    hdr.setContrast(1.06f);
+
+    // Localized fog (volumes provided by AtmosphereLayer)
+    FogPass fog = new FogPass(); fog.init();
 
     GodRaysPass rays = new GodRaysPass(sky, terrainPass, birds); rays.init(Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
     // Rays exposure
@@ -63,12 +60,12 @@ public final class RenderBootstrap {
 
     RenderPipeline rp = new RenderPipeline()
         .add(sky)
-        .add(extras)
         .add(terrainPass);
     // Add splines pass here if available (Editor will attach it when layer exists)
     // rp.add(new SplinesPass(splinesLayer));
-    rp.add(hdr)
+    rp
       .add(birds)
+      .add(fog)
       .add(rays)
       .add(marker);
     return rp;

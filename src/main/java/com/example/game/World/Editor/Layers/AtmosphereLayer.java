@@ -12,19 +12,261 @@ import com.example.game.Render.Pipeline.RenderPipeline;
 import com.example.game.Render.Passes.HDRPrePass;
 import com.example.game.Render.Passes.SkyPass;
 import com.example.game.Render.Passes.GodRaysPass;
+import com.example.game.Render.Passes.FogPass;
 import com.example.game.Screens.EditorScreen;
 import com.example.game.Config.cvar.CVars;
+import com.example.game.World.Atmosphere.FogVolume;
+import com.example.game.World.TerrainSystem;
+import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.graphics.Camera;
+import com.badlogic.gdx.graphics.GL20;
+import com.badlogic.gdx.math.Vector3;
+import com.badlogic.gdx.math.collision.Ray;
+import com.example.game.World.Editor.EditorContext;
 
 public final class AtmosphereLayer extends BaseToolLayer {
   private final RenderPipeline pipeline;
   private final EditorScreen editor;
+  private final TerrainSystem terrain;
 
-  public AtmosphereLayer(RenderPipeline pipeline, EditorScreen editor) {
+  public AtmosphereLayer(RenderPipeline pipeline, EditorScreen editor, TerrainSystem terrain) {
     super("atmosphere", "Atmosphere");
     this.pipeline = pipeline;
     this.editor = editor;
+    this.terrain = terrain;
     addTool(new ExposureTool());
     addTool(new SkyTool());
+    addTool(new FogTool());
+    // Hook fog supplier if pass exists
+    try {
+      FogPass fog = pipeline.get(FogPass.class);
+      if (fog != null) fog.setSupplier(() -> fogVolumes);
+    } catch (Throwable ignored) {}
+  }
+
+  // ---------------- Fog Tool ----------------
+  private final java.util.List<FogVolume> fogVolumes = new java.util.ArrayList<>();
+  private int fogSelected = -1;
+  private final class FogTool implements Tool {
+    private final com.badlogic.gdx.graphics.glutils.ImmediateModeRenderer20 imBox = new com.badlogic.gdx.graphics.glutils.ImmediateModeRenderer20(4096, false, true, 0);
+    private final com.badlogic.gdx.graphics.glutils.ImmediateModeRenderer20 imCir = new com.badlogic.gdx.graphics.glutils.ImmediateModeRenderer20(4096, false, true, 0);
+    @Override public String name() { return "Fog"; }
+    @Override public void buildUI(Table ui, Skin skin) {
+      ui.add(new Label("Fog Volumes", skin, "title")).left().row();
+
+      // List of fog items
+      final com.badlogic.gdx.scenes.scene2d.ui.List<String> list = new com.badlogic.gdx.scenes.scene2d.ui.List<>(skin);
+      final com.badlogic.gdx.scenes.scene2d.ui.ScrollPane scroll = new com.badlogic.gdx.scenes.scene2d.ui.ScrollPane(list, skin);
+      scroll.setFadeScrollBars(false);
+      ui.add(scroll).width(260).height(160).left().row();
+
+      // Radius slider
+      ui.add(new Label("Radius", skin)).left().padTop(6).row();
+      final Slider radius = new Slider(1f, 2000f, 0.5f, false, skin);
+      ui.add(radius).width(240).row();
+
+      // Falloff slider
+      ui.add(new Label("Falloff", skin)).left().padTop(6).row();
+      final Slider falloff = new Slider(0f, 1f, 0.01f, false, skin);
+      ui.add(falloff).width(240).row();
+
+      // Intensity (density) slider
+      ui.add(new Label("Intensity", skin)).left().padTop(6).row();
+      final Slider intensity = new Slider(0f, 3f, 0.01f, false, skin);
+      ui.add(intensity).width(240).row();
+
+      // RGB tint sliders
+      ui.add(new Label("Tint R", skin)).left().padTop(6).row();
+      final Slider tintR = new Slider(0f, 1f, 0.01f, false, skin);
+      ui.add(tintR).width(240).row();
+      ui.add(new Label("Tint G", skin)).left().padTop(4).row();
+      final Slider tintG = new Slider(0f, 1f, 0.01f, false, skin);
+      ui.add(tintG).width(240).row();
+      ui.add(new Label("Tint B", skin)).left().padTop(4).row();
+      final Slider tintB = new Slider(0f, 1f, 0.01f, false, skin);
+      ui.add(tintB).width(240).row();
+
+      // Noise slider
+      ui.add(new Label("Local Noise", skin)).left().padTop(6).row();
+      final Slider noise = new Slider(0f, 1f, 0.01f, false, skin);
+      ui.add(noise).width(240).row();
+
+      // Near Clip slider (when inside, push fog start away from camera)
+      ui.add(new Label("Near Clip (m)", skin)).left().padTop(6).row();
+      final Slider nearClip = new Slider(0f, 50f, 0.5f, false, skin);
+      ui.add(nearClip).width(240).row();
+
+      // Delete button
+      com.badlogic.gdx.scenes.scene2d.ui.TextButton del = new com.badlogic.gdx.scenes.scene2d.ui.TextButton("Delete", skin);
+      ui.add(del).left().padTop(6).row();
+
+      // Bindings
+      list.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+        fogSelected = list.getSelectedIndex();
+        if (fogSelected >= 0 && fogSelected < fogVolumes.size()) {
+          FogVolume v = fogVolumes.get(fogSelected);
+          radius.setValue(v.radius);
+          falloff.setValue(v.falloff);
+          intensity.setValue(v.density);
+          noise.setValue(v.noise);
+          nearClip.setValue(v.nearClip);
+          tintR.setValue(v.r); tintG.setValue(v.g); tintB.setValue(v.b);
+        }
+      }});
+      radius.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+        if (fogSelected >= 0 && fogSelected < fogVolumes.size()) fogVolumes.get(fogSelected).radius = radius.getValue();
+      }});
+      falloff.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+        if (fogSelected >= 0 && fogSelected < fogVolumes.size()) fogVolumes.get(fogSelected).falloff = falloff.getValue();
+      }});
+      intensity.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+        if (fogSelected >= 0 && fogSelected < fogVolumes.size()) fogVolumes.get(fogSelected).density = intensity.getValue();
+      }});
+      noise.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+        if (fogSelected >= 0 && fogSelected < fogVolumes.size()) fogVolumes.get(fogSelected).noise = noise.getValue();
+      }});
+      nearClip.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+        if (fogSelected >= 0 && fogSelected < fogVolumes.size()) fogVolumes.get(fogSelected).nearClip = nearClip.getValue();
+      }});
+      tintR.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ if (fogSelected>=0 && fogSelected<fogVolumes.size()) fogVolumes.get(fogSelected).r = tintR.getValue(); }});
+      tintG.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ if (fogSelected>=0 && fogSelected<fogVolumes.size()) fogVolumes.get(fogSelected).g = tintG.getValue(); }});
+      tintB.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){ if (fogSelected>=0 && fogSelected<fogVolumes.size()) fogVolumes.get(fogSelected).b = tintB.getValue(); }});
+      del.addListener(new ChangeListener(){ @Override public void changed(ChangeEvent event, Actor actor){
+        if (fogSelected >= 0 && fogSelected < fogVolumes.size()) { fogVolumes.remove(fogSelected); fogSelected = Math.min(fogSelected, fogVolumes.size()-1); refreshList(list); }
+      }});
+
+      refreshList(list);
+    }
+
+    private void refreshList(com.badlogic.gdx.scenes.scene2d.ui.List<String> list) {
+      String[] items = new String[fogVolumes.size()];
+      for (int i = 0; i < items.length; i++) items[i] = String.format("Fog %d", i);
+      list.setItems(items);
+      if (fogSelected >= 0 && fogSelected < items.length) list.setSelectedIndex(fogSelected);
+    }
+
+    // Interaction state
+    private boolean dragging = false;
+
+    @Override public void onSelected() { dragging = false; }
+
+    @Override public void onPointerDown(int button, boolean shift, boolean ctrl) {
+      if (button != com.badlogic.gdx.Input.Buttons.LEFT) return;
+      Camera cam = EditorContext.getCamera();
+      Ray ray = cam.getPickRay(Gdx.input.getX(), Gdx.input.getY());
+      if (ctrl) {
+        // Place new fog at ground under cursor (baseline + mountains)
+        Vector3 hit = terrain.getPicker().rayIntersectTerrainFastPlane(ray, terrain.getBasePlusMountainsSampler());
+        if (hit != null) {
+          FogVolume v = new FogVolume().set(hit.x, hit.y, hit.z, 25f);
+          fogVolumes.add(v); fogSelected = fogVolumes.size()-1;
+        }
+        dragging = false; return;
+      }
+      // Select nearest fog by projected distance
+      int nearest = pickNearestFog(cam);
+      if (nearest >= 0) { fogSelected = nearest; dragging = true; } else { dragging = false; }
+    }
+
+    @Override public void onPointerDrag(int button, boolean shift, boolean ctrl) { /* handled in update */ }
+
+    @Override public void onPointerUp(int button, boolean shift, boolean ctrl) { dragging = false; }
+
+    @Override public void update(float dt, Camera cam) {
+      if (!dragging || fogSelected < 0 || fogSelected >= fogVolumes.size()) return;
+      Ray ray = cam.getPickRay(Gdx.input.getX(), Gdx.input.getY());
+      Vector3 hit = terrain.getPicker().rayIntersectTerrainFastPlane(ray, terrain.getBasePlusMountainsSampler());
+      if (hit != null) {
+        FogVolume v = fogVolumes.get(fogSelected);
+        v.center.set(hit.x, hit.y, hit.z);
+      }
+    }
+
+    @Override public void render3D(Camera cam) {
+      // Pass 1: node boxes (exactly like NodeBoxRenderer)
+      com.badlogic.gdx.Gdx.gl.glBindTexture(GL20.GL_TEXTURE_2D, 0);
+      Gdx.gl.glDisable(GL20.GL_DEPTH_TEST);
+      Gdx.gl.glDisable(GL20.GL_CULL_FACE);
+      Gdx.gl.glLineWidth(2f);
+      imBox.begin(cam.combined, GL20.GL_LINES);
+      for (int i = 0; i < fogVolumes.size(); i++) {
+        FogVolume v = fogVolumes.get(i);
+        float s = 0.6f; // constant half-size for origin box
+        float x0 = v.center.x - s, y0 = v.center.y - s, z0 = v.center.z - s;
+        float x1 = v.center.x + s, y1 = v.center.y + s, z1 = v.center.z + s;
+        // Colors like spline nodes (alpha=1 for solid bright lines)
+        float cr, cg, cb, ca = 1.0f;
+        if (i == fogSelected) { cr = 1.0f; cg = 0.25f; cb = 0.25f; }
+        else if (fogSelected >= 0) { cr = 0.20f; cg = 0.60f; cb = 1.00f; }
+        else { cr = 0.08f; cg = 0.35f; cb = 0.60f; }
+        boxLines(imBox, cr,cg,cb,ca, x0,y0,z0, x1,y1,z1);
+      }
+      imBox.end();
+      Gdx.gl.glLineWidth(1f);
+
+      // Pass 2: ground helper circles (depth-tested so they "fight" terrain)
+      Gdx.gl.glEnable(GL20.GL_DEPTH_TEST);
+      // Keep culling disabled for wire circles
+      Gdx.gl.glDisable(GL20.GL_CULL_FACE);
+      Gdx.gl.glEnable(GL20.GL_BLEND);
+      Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
+      imCir.begin(cam.combined, GL20.GL_LINES);
+      for (int i = 0; i < fogVolumes.size(); i++) {
+        FogVolume v = fogVolumes.get(i);
+        float y = v.center.y;
+        drawCircleXZ(imCir, v.center.x, y, v.center.z, v.radius, (i == fogSelected));
+      }
+      imCir.end();
+      Gdx.gl.glDisable(GL20.GL_BLEND);
+      Gdx.gl.glEnable(GL20.GL_CULL_FACE);
+      // Leave depth test state as it was before
+    }
+
+    private void boxLines(com.badlogic.gdx.graphics.glutils.ImmediateModeRenderer20 im, float cr,float cg,float cb,float ca, float x0,float y0,float z0, float x1,float y1,float z1) {
+      // 12 edges
+      line(im, cr,cg,cb,ca, x0,y0,z0, x1,y0,z0); line(im, cr,cg,cb,ca, x1,y0,z0, x1,y0,z1); line(im, cr,cg,cb,ca, x1,y0,z1, x0,y0,z1); line(im, cr,cg,cb,ca, x0,y0,z1, x0,y0,z0);
+      line(im, cr,cg,cb,ca, x0,y1,z0, x1,y1,z0); line(im, cr,cg,cb,ca, x1,y1,z0, x1,y1,z1); line(im, cr,cg,cb,ca, x1,y1,z1, x0,y1,z1); line(im, cr,cg,cb,ca, x0,y1,z1, x0,y1,z0);
+      line(im, cr,cg,cb,ca, x0,y0,z0, x0,y1,z0); line(im, cr,cg,cb,ca, x1,y0,z0, x1,y1,z0); line(im, cr,cg,cb,ca, x1,y0,z1, x1,y1,z1); line(im, cr,cg,cb,ca, x0,y0,z1, x0,y1,z1);
+    }
+    private void line(com.badlogic.gdx.graphics.glutils.ImmediateModeRenderer20 im, float cr,float cg,float cb,float ca, float x0,float y0,float z0, float x1,float y1,float z1) {
+      im.color(cr,cg,cb,ca); im.vertex(x0,y0,z0);
+      im.color(cr,cg,cb,ca); im.vertex(x1,y1,z1);
+    }
+
+    // Overload used by drawCircleXZ which sets color externally
+    private void line(com.badlogic.gdx.graphics.glutils.ImmediateModeRenderer20 im, float x0,float y0,float z0, float x1,float y1,float z1) {
+      im.vertex(x0,y0,z0);
+      im.vertex(x1,y1,z1);
+    }
+
+    private void drawCircleXZ(com.badlogic.gdx.graphics.glutils.ImmediateModeRenderer20 im, float cx, float y, float cz, float r, boolean selected) {
+      int segs = 48;
+      float scale = 1f; // boosted to better match perceived screen-space fog mask
+      float rr = r * scale;
+      float prevX = cx + rr, prevZ = cz;
+      for (int i = 1; i <= segs; i++) {
+        float ang = (float)(i * (Math.PI * 2.0) / segs);
+        float x = cx + rr * (float)Math.cos(ang);
+        float z = cz + rr * (float)Math.sin(ang);
+        if (selected) im.color(1.0f, 0.75f, 0.15f, 1.0f); else im.color(0.2f, 0.9f, 0.6f, 0.9f);
+        line(im, prevX, y, prevZ, x, y, z);
+        prevX = x; prevZ = z;
+      }
+    }
+
+    private int pickNearestFog(Camera cam) {
+      int sx = Gdx.input.getX(); int sy = Gdx.input.getY();
+      float best = 24f; // pixels
+      int bestIdx = -1;
+      for (int i = 0; i < fogVolumes.size(); i++) {
+        Vector3 ndc = new Vector3(fogVolumes.get(i).center).prj(cam.combined);
+        float ux = (ndc.x * 0.5f + 0.5f) * Gdx.graphics.getWidth();
+        float uy = (1f - (ndc.y * 0.5f + 0.5f)) * Gdx.graphics.getHeight();
+        float dx = sx - ux, dy = sy - uy; float d = (float)Math.sqrt(dx*dx + dy*dy);
+        if (d < best) { best = d; bestIdx = i; }
+      }
+      return bestIdx;
+    }
   }
 
   @Override public void onActivate() { }
